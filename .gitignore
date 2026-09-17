@@ -1,0 +1,8 @@
+# Per machine, never "do not look": scripts/check-secrets.sh walks the directory
+# rather than git ls-files, precisely because the highest risk content on a disk
+# is what this file excludes.
+.DS_Store
+.build/
+.swiftpm/
+*.xcuserdatad
+xcuserdata/

@@ -1,0 +1,57 @@
+#!/bin/bash
+# Refuse a push whose suite is red or whose tree holds a credential.
+#
+# backstage#1. This runs on EVERY push from this clone, whoever makes it: a
+# terminal, Xcode's source control panel, any git client. That is why it exists
+# separately from any harness level gate, which only sees pushes made one way.
+#
+# THE TREE BEING PUSHED, NOT THE TREE THIS FILE LIVES IN (L398, ovation#138).
+# git runs a pre-push with its working directory at the top of the tree the push
+# comes from, so the working directory is the right question to ask and the hook
+# file's own location is the wrong one. The port source derived it from the file's
+# location with core.hooksPath left absolute, and a push from a worktree then ran
+# the primary checkout's hook against the primary checkout's tree. The branch
+# being pushed was never looked at. scripts/test-git-hooks.sh measures this with
+# a real push rather than trusting it (L82).
+#
+# JUDGED BY EXIT CODE, never by a line of output. A tool's final line is
+# routinely a different measurement than its verdict, and usually the more
+# reassuring of the two (L184).
+#
+# SCOPE, stated so its limits are not mistaken for coverage (L400): this checks
+# that the suite is green and that no credential or real mailbox is in the tree.
+# It does NOT check port freshness, CI state, or anything about the remote. Each
+# of those is added by the issue that builds it, rather than being listed here as
+# though it were already covered.
+set -uo pipefail
+
+ROOT="$(pwd)"
+FAILED=0
+
+# REFUSED, NOT GUESSED, when the question cannot be answered: a hook always runs
+# inside a repository, so a missing guard means something is wrong with the tree
+# rather than that the tree is clean (L98).
+for required in scripts/run-tests.sh scripts/check-secrets.sh; do
+    if [ ! -x "$ROOT/$required" ]; then
+        echo "PUSH REFUSED: $required is missing or not executable in the tree being pushed." >&2
+        echo "  Nothing was checked, which is not the same as nothing being wrong." >&2
+        exit 1
+    fi
+done
+
+echo "pre-push: checking the tree being pushed at $ROOT" >&2
+
+if ! "$ROOT/scripts/check-secrets.sh" "$ROOT" >&2; then
+    echo "PUSH REFUSED: the secrets guard refused. The rule that fired is named above." >&2
+    echo "  This repository is PUBLIC, so a pushed credential is compromised immediately." >&2
+    FAILED=1
+fi
+
+if ! "$ROOT/scripts/run-tests.sh" >&2; then
+    echo "PUSH REFUSED: the suite is red. The failing suite is named above." >&2
+    FAILED=1
+fi
+
+# BOTH are run before either refuses, so one push reports everything wrong with
+# the tree rather than handing them back one at a time.
+exit "$FAILED"
