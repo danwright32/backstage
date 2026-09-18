@@ -16,7 +16,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 REPO_ROOT="$(pwd)"
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "git hook tests" 12
+harness_begin "git hook tests" 14
 
 TARGET="scripts/git-hooks/pre-push"
 require_target "$TARGET"
@@ -100,6 +100,19 @@ git -C "$D" add -A && git -C "$D" commit -qm "liar"
 push "$D"
 check "a suite claiming success but exiting non zero still refuses" \
       "$( [ "$CODE" -ne 0 ] && echo refused || echo pushed )" "refused"
+
+# TWO OUTCOMES, TWO MESSAGES (L11, L622). A suite that RAN and failed and a
+# suite that never ran are different facts, and the second is "unmeasured"
+# rather than "red". Found on this hook's own first real push, which called a
+# non executable suite a red one and would have sent somebody hunting a test
+# failure that did not exist.
+D="$(make_repo unmeasured)"
+printf 'not executable\n' > "$D/scripts/test-cannot-run.sh"
+chmod -x "$D/scripts/test-cannot-run.sh"
+git -C "$D" add -A && git -C "$D" commit -qm "unrunnable"
+push "$D"
+check "a suite that never ran is called unmeasured" "$(says "$OUT" "UNMEASURED")" "yes"
+check "a suite that never ran is not called red" "$(says "$OUT" "the suite is red")" "no"
 
 # THE TREE BEING PUSHED, not the tree the hook file lives in (L398, ovation#138).
 # The hook here is deliberately given a DIFFERENT repository's guard to find if

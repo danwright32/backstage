@@ -47,10 +47,21 @@ if ! "$ROOT/scripts/check-secrets.sh" "$ROOT" >&2; then
     FAILED=1
 fi
 
-if ! "$ROOT/scripts/run-tests.sh" >&2; then
-    echo "PUSH REFUSED: the suite is red. The failing suite is named above." >&2
-    FAILED=1
-fi
+# TWO OUTCOMES, TWO MESSAGES. The runner exits 1 for a suite that RAN and
+# failed, and 2 for a suite it discovered that never ran at all. Folding them
+# into one sentence sends somebody looking for a test failure that does not
+# exist, and a state meaning "never measured" separated from failure only in
+# wording is not separated at all (L11, L622). Seen on the first real push of
+# this hook, which reported a non executable suite as a red one.
+"$ROOT/scripts/run-tests.sh" >&2
+case "$?" in
+    0) ;;
+    1) echo "PUSH REFUSED: the suite is red. The failing suite is named above." >&2
+       FAILED=1 ;;
+    *) echo "PUSH REFUSED: a suite was discovered but never ran, so the tree is UNMEASURED." >&2
+       echo "  That is not the same as the suite passing. The suite is named above." >&2
+       FAILED=1 ;;
+esac
 
 # BOTH are run before either refuses, so one push reports everything wrong with
 # the tree rather than handing them back one at a time.
