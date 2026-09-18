@@ -47,11 +47,12 @@ two disagree about expanding an empty array, which is a fault that has already
 shipped here once. Each job prints the bash it ran, so an image quietly moving
 to bash 5 on macOS removes that coverage loudly rather than silently.
 
-The rule is enforced for admins too, because a rule the owner can step around is
-a warning rather than a rule. To lift it in a genuine emergency, and put it back
-in the same sitting:
+The rule is **not** enforced for the repository owner, by Dan's decision of
+2026-09-17: a branch frozen by a CI outage is worse here than an occasional
+unchecked push, in a repository with one committer. Everyone else, and every
+pull request, still needs both checks. To make it strict, and to lift it again:
 
-    gh api -X PUT repos/danwright32/backstage/branches/main/protection/enforce_admins
+    gh api -X POST repos/danwright32/backstage/branches/main/protection/enforce_admins
     gh api -X DELETE repos/danwright32/backstage/branches/main/protection/enforce_admins
 
 **The two job names are load bearing.** They are what the branch rule names, and
