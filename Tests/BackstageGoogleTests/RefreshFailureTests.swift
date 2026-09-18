@@ -61,6 +61,18 @@ struct RefreshFailureTests {
         }
     }
 
+    // A DEAD LOGIN IS DECIDED BY GOOGLE'S `error` FIELD, not by the word
+    // appearing anywhere in the body. Google returns a JSON object whose `error`
+    // is the machine readable code and whose `error_description` is prose, and
+    // prose can quote a code it is not reporting. Branching on a substring of the
+    // whole body reads both the same way, and it fails in the costly direction:
+    // it signs somebody out over a request that was merely refused (L35).
+    @Test func theCodeDecidesADeadLoginNotAWordInTheProse() {
+        let quoted = #"{"error":"rate_limit_exceeded","error_description":"not an invalid_grant, slow down"}"#
+        let result = GoogleOAuth.interpretRefreshResponse(status: 400, data: body(quoted))
+        #expect(result == .failure(.transient))
+    }
+
     // The request builders. Form encoded, and the PKCE verifier has to be in the
     // exchange or Google refuses it.
     @Test func theExchangeCarriesTheVerifier() throws {

@@ -14,7 +14,14 @@
 //    default and no memberwise shortcut, so a consumer that names none does not
 //    compile.
 //
-// 2. The consumer facing types and functions are `public`. The origin is one app,
+// 2. A DEAD LOGIN IS READ FROM GOOGLE'S `error` FIELD, not from the word
+//    appearing anywhere in the body. This one is a FIX, and the origin has it
+//    too, so it is tracked there rather than only here. Seen to fail: a 400
+//    whose error is rate_limit_exceeded and whose description quotes
+//    invalid_grant was read as a dead login, which sends somebody round the
+//    whole consent flow over a request that was merely refused.
+//
+// 3. The consumer facing types and functions are `public`. The origin is one app,
 //    so everything was internal. Only what a consumer must name is public;
 //    ResponseBody beside this file stays internal.
 
@@ -119,8 +126,27 @@ public enum GoogleOAuth {
                                             endpoint: "google.oauth.token").value {
             return .success(tokens)
         }
-        let body = String(data: data, encoding: .utf8) ?? ""
-        if status == 401 || (status == 400 && body.contains("invalid_grant")) {
+        // A THIRD DELIBERATE CHANGE FROM THE ORIGIN, and it is a fix rather than
+        // an adaptation, so it is tracked at the origin too (see the header).
+        //
+        // The origin asks whether the raw body CONTAINS "invalid_grant". Google
+        // returns a JSON object whose `error` is the machine readable code and
+        // whose `error_description` is prose, and prose can quote a code it is
+        // not reporting. A substring of the whole body reads both the same way.
+        //
+        // It fails in the COSTLY direction: a request that was merely refused,
+        // rate limited say, gets read as a dead login, and the person is sent
+        // round the whole consent flow again for nothing (L35, L93).
+        //
+        // So the code is read from the field that carries it. A body that is not
+        // JSON, or carries no `error`, says nothing about the login and is
+        // therefore transient: we do not know is not the same as it is dead, and
+        // of the two ways to be wrong this is the recoverable one.
+        if status == 401 { return .failure(.authExpired) }
+        if status == 400,
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let code = object["error"] as? String,
+           code == "invalid_grant" {
             return .failure(.authExpired)
         }
         return .failure(.transient)
