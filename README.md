@@ -37,3 +37,23 @@ matched.
 `scripts/run-tests.sh` runs every `scripts/test-*.sh`, judges each by its exit
 code, and refuses both a run that found no suites and a run in which a suite it
 discovered did not execute.
+
+## main is protected, so changes go through a pull request
+
+CI runs the guard against the real tree and then the suite, on **ubuntu-latest
+and macos-latest both**, and main requires both to pass. The macOS job is not
+redundant: macOS ships bash 3.2 and Linux ships bash 5, and under `set -u` the
+two disagree about expanding an empty array, which is a fault that has already
+shipped here once. Each job prints the bash it ran, so an image quietly moving
+to bash 5 on macOS removes that coverage loudly rather than silently.
+
+The rule is enforced for admins too, because a rule the owner can step around is
+a warning rather than a rule. To lift it in a genuine emergency, and put it back
+in the same sitting:
+
+    gh api -X PUT repos/danwright32/backstage/branches/main/protection/enforce_admins
+    gh api -X DELETE repos/danwright32/backstage/branches/main/protection/enforce_admins
+
+**The two job names are load bearing.** They are what the branch rule names, and
+a branch rule cannot be found by searching this repository. Renaming a job
+without updating the rule leaves main requiring a check that no longer runs.
