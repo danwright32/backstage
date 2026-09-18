@@ -21,7 +21,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "test runner tests" 10
+harness_begin "test runner tests" 19
 
 TARGET="scripts/run-tests.sh"
 require_target "$TARGET"
@@ -77,5 +77,55 @@ chmod -x "$D/scripts/test-two.sh"
 run_runner "$D"
 check "a discovered suite that could not run is refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
 check "the suite that did not run is named" "$(says "$OUT" "test-two.sh")" "yes"
+
+# --- the Swift package, which is macOS only ---
+#
+# The package imports AppKit and Network, neither of which exists on Linux, so
+# `swift test` runs on macOS and is SKIPPED elsewhere. A skip that says nothing
+# is the whole defect this suite exists to prevent: a run that quietly did less
+# work still prints a verdict (L98, L288). So the skip has to SPEAK.
+#
+# Both the platform and the swift command are seams, because a suite that shells
+# out to the real toolchain measures the toolchain (L2, L291).
+swift_stub() { printf '#!/bin/bash\nexit %s\n' "$2" > "$1/swift"; chmod +x "$1/swift"; }
+
+D="$(make_tree swift-pass)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_stub "$D" 0
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a package whose swift tests pass is accepted" "$CODE" "0"
+check "and the run says the swift tests ran" "$(says "$OUT" "swift")" "yes"
+
+D="$(make_tree swift-fail)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_stub "$D" 1
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "failing swift tests fail the run" "$( [ "$CODE" -ne 0 ] && echo failed || echo passed )" "failed"
+# NOT "the output must never say 0 failed": it legitimately does, because the
+# SHELL suites did all pass, and that line is true. What matters is that the
+# swift failure is named after it and the run ends non zero, so a reader cannot
+# stop at the first summary and be wrong (L11).
+check "and the swift failure is named, not just counted" "$(says "$OUT" "swift tests FAILED")" "yes"
+
+# SKIPPED, AND SAID OUT LOUD. This is the case that would otherwise read exactly
+# like a full run on the platform where half the work cannot happen.
+D="$(make_tree swift-other-platform)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_stub "$D" 1
+OUT="$(BACKSTAGE_PLATFORM=Linux BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a non macOS platform skips the swift tests rather than failing" "$CODE" "0"
+check "and the skip says so out loud" "$(says "$OUT" "SKIPPED")" "yes"
+check "and the skip names why it skipped" "$(says "$OUT" "macOS")" "yes"
+
+# A tree with no package says nothing about swift at all, so the sentence above
+# cannot become noise every repository prints.
+D="$(make_tree no-package)"
+suite "$D/scripts/test-one.sh" 0
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a tree with no package is accepted" "$CODE" "0"
+check "and says nothing about swift" "$(says "$OUT" "swift")" "no"
 
 harness_end

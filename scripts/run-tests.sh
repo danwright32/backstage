@@ -69,6 +69,32 @@ fi
 
 echo "ran $EXECUTED of $DISCOVERED suites, ${#FAILED[@]} failed"
 
+# THE SWIFT PACKAGE, WHICH IS macOS ONLY.
+#
+# Sources/BackstageGoogle imports AppKit and Network, neither of which exists on
+# Linux, so `swift test` can only run on macOS. The skip is SPOKEN rather than
+# silent: a run that quietly did half the work still prints a verdict, and a
+# reader has no way to tell it from a full one (L98, L288).
+#
+# Both seams exist so the runner's own suite can drive every branch without
+# shelling out to the real toolchain, which would measure the toolchain rather
+# than this decision (L2, L291).
+SWIFT_FAILED=0
+if [ -f "Package.swift" ]; then
+    PLATFORM="${BACKSTAGE_PLATFORM:-$(uname -s)}"
+    SWIFT="${BACKSTAGE_SWIFT:-swift}"
+    if [ "$PLATFORM" != "Darwin" ]; then
+        echo "swift tests SKIPPED: this package is macOS only (it imports AppKit and Network), and this is $PLATFORM."
+        echo "    That is not the same as the swift tests passing."
+    elif "$SWIFT" test > /dev/null 2>&1; then
+        echo "swift tests passed"
+    else
+        echo "swift tests FAILED"
+        SWIFT_FAILED=1
+    fi
+fi
+
 [ "${#NOT_RUN[@]}" -gt 0 ] && exit 2
 [ "${#FAILED[@]}" -gt 0 ] && exit 1
+[ "$SWIFT_FAILED" -ne 0 ] && exit 1
 exit 0
