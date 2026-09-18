@@ -20,9 +20,16 @@
 #
 # SCOPE, stated so its limits are not mistaken for coverage (L400): this checks
 # that the suite is green and that no credential or real mailbox is in the tree.
-# It does NOT check port freshness, CI state, or anything about the remote. Each
-# of those is added by the issue that builds it, rather than being listed here as
-# though it were already covered.
+#
+# Port freshness IS covered, but transitively rather than by a line here:
+# scripts/test-check-ported-artifacts.sh runs the real check against the real
+# tree and the real siblings as one of its own cases, so a port whose recorded
+# commit has left the origin's main turns the suite red. Named here because a
+# reader counting the lines below would otherwise conclude it was not covered.
+#
+# It does NOT check CI state or anything about the remote. Each of those is added
+# by the issue that builds it, rather than being listed here as though it were
+# already covered.
 set -uo pipefail
 
 ROOT="$(pwd)"

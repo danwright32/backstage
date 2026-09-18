@@ -4,11 +4,9 @@
 # also in the origin: fix it there and re-port, or the two silently diverge and
 # the shared definition stops being shared (L263).
 #
-#   origin repository: danwright32/ovation
-#   origin path:       scripts/lib/test-harness.sh
-#   origin commit:     1220f3caec84ff6ca4663638145eb2e10a46c0df
-#   ported on:         2026-09-17
-#   ported by:         backstage#1
+# Ported-From: danwright32/ovation scripts/lib/test-harness.sh @ 1220f3caec84ff6ca4663638145eb2e10a46c0df
+#
+#   ported on: 2026-09-17 by backstage#1
 #
 # Every constant below was re-checked against what backstage needs rather than
 # inherited: cloning a proven pattern copies it as first written, corrections
