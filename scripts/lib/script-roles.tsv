@@ -1,0 +1,23 @@
+# What runs each script here, so that a check nothing runs is a fault rather
+# than a file. One row per script under scripts/, excluding git-hooks/.
+#
+# Format: path<TAB>role<TAB>reason
+#
+# The roles are the origin repository's vocabulary, used unchanged so the two
+# inventories stay readable side by side: suite, gated, workflow, library, tool.
+
+check-ci-workflow.sh	gated	A repo wide guard. test-ci-workflow.sh drives it, and that suite runs on every push through run-tests.sh.
+check-ported-artifacts.sh	gated	A repo wide guard. test-check-ported-artifacts.sh runs it against the real tree and the real siblings as one of its own cases, so a stale port turns the suite red on push.
+check-secrets.sh	workflow	Named by the CI workflow step, and by the pre push hook. It is the only thing that scans the REAL tree: the suite exercises it against throwaway trees only.
+install-git-hooks.sh	tool	Run by hand, once per clone. Nothing automated may call it, because a hook a machine installed for you is one nobody chose.
+run-tests.sh	gated	The runner the pre push hook and the CI workflow both call. test-run-tests.sh drives it against throwaway trees.
+lib/repo-git.sh	library	Sourced by check-ported-artifacts.sh. Never run.
+lib/script-roles.sh	library	The one reader of this file. Sourced by check-ci-workflow.sh. Never run.
+lib/test-harness.sh	library	Sourced by every suite. test-test-harness.sh covers it.
+lib/workflow-text.sh	library	Sourced by check-ci-workflow.sh to decide what counts as a step. Never run.
+test-check-ported-artifacts.sh	suite	Covers check-ported-artifacts.sh.
+test-ci-workflow.sh	suite	Covers check-ci-workflow.sh.
+test-git-hooks.sh	suite	Covers the pre push hook and install-git-hooks.sh, with real pushes to a real throwaway remote.
+test-run-tests.sh	suite	Covers run-tests.sh.
+test-secrets-guard.sh	suite	Covers check-secrets.sh.
+test-test-harness.sh	suite	Covers lib/test-harness.sh.

@@ -1,0 +1,70 @@
+name: CI
+
+# ONE RUN PER COMMIT. A workflow listening on pull_request AND on push to every
+# branch runs each pull request commit twice, and nothing fails: it only queues
+# and bills. So push is narrowed to main, where there is no pull request run to
+# duplicate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push supersedes the first. SAFE HERE BECAUSE THESE JOBS WRITE
+# NOTHING: they read the tree and report. A cancelling rule saves a read only job
+# and crashes a writing one, so this is decided per workflow by what it writes,
+# never copied in as a default.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # BOTH PLATFORMS, and the macOS one is not redundant.
+  #
+  # macOS ships bash 3.2. Linux runners ship bash 5. Under `set -u` those two
+  # disagree about expanding an EMPTY array: 3.2 calls it an unbound variable and
+  # kills the script, 5 expands it to nothing. That exact fault shipped in this
+  # repository's own test runner and made a completely healthy run exit 1 with no
+  # verdict printed (L486). A shell suite validated only on Linux cannot see that
+  # class at all, and this repository's scripts run on Dan's Mac every day.
+  #
+  # The cost is real and deliberate: macOS runners bill at ten times the Linux
+  # rate. On a public repository the minutes are unlimited, so what is actually
+  # being spent is a concurrency slot, and this suite holds one for about twelve
+  # seconds.
+  shell-suites:
+    name: Shell suites on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # A TIMEOUT ON EVERY JOB. GitHub's default is six hours. A hung job is worse
+    # than a failed one, because it cannot be told from a slow one and it holds a
+    # runner slot for the whole of it.
+    timeout-minutes: 10
+    strategy:
+      # One platform failing must not cancel the other, or the second platform's
+      # verdict is lost exactly when the first has found something.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # PINNED TO A SHA, never a moving tag. `@v4` is somebody else's code
+      # running here tomorrow, chosen by them.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # THE GUARD RUNS AGAINST THE REAL TREE, and it runs FIRST.
+      #
+      # The suite does NOT do this. scripts/test-secrets-guard.sh exercises the
+      # guard against throwaway trees only, so a job running the suite alone
+      # would never once look at the repository it is guarding. And the pre push
+      # hook that does look is per clone, installed by hand, and skipped by
+      # --no-verify, so it cannot be the only place this runs.
+      - name: The privacy floor, against this tree
+        run: bash scripts/check-secrets.sh . && bash scripts/run-tests.sh
+
+      # WHICH BASH ACTUALLY RAN, recorded rather than assumed. The reason this
+      # matrix exists is a version difference, so a runner image quietly moving
+      # to bash 5 on macOS would remove the coverage with nothing to say so.
+      - name: Say which bash ran, since that is why this matrix exists
+        if: always()
+        run: bash --version | head -1
