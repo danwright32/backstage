@@ -31,6 +31,18 @@ if [ "$(uname -s)" != "Darwin" ]; then
     harness_end
 fi
 
+# The consumer depends on this repository through a symlink whose name is deliberately NOT
+# `backstage`, so every run exercises the case that used to break the suite (backstage#28): SwiftPM
+# takes a path dependency's IDENTITY from the last path component, and a git worktree's directory is
+# named after the branch, never after the repository. A symlink is enough, because SwiftPM reads the
+# link's own name and not the path it resolves to, which was measured rather than assumed.
+LINKED="$WORK/not-named-after-this-repo"
+ln -s "$REPO_ROOT" "$LINKED"
+# The identity is DERIVED from the very path handed to .package(path:), by the rule SwiftPM itself
+# uses, so the two cannot disagree however the directory is named (L41). Spelling it out instead is
+# what broke: it read `backstage`, which is true of one checkout on one Mac.
+LINKED_ID="$(basename "$LINKED")"
+
 C="$WORK/consumer"
 mkdir -p "$C/Sources/Consumer"
 cat > "$C/Package.swift" <<EOF
@@ -39,9 +51,9 @@ import PackageDescription
 let package = Package(
     name: "Consumer",
     platforms: [.macOS(.v14)],
-    dependencies: [.package(path: "$REPO_ROOT")],
+    dependencies: [.package(path: "$LINKED")],
     targets: [.executableTarget(name: "Consumer",
-                                dependencies: [.product(name: "BackstageGoogle", package: "backstage")])]
+                                dependencies: [.product(name: "BackstageGoogle", package: "$LINKED_ID")])]
 )
 EOF
 
