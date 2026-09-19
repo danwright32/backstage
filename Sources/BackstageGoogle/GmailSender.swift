@@ -41,7 +41,9 @@ public struct GmailSender: MailSender {
         self.fromEmail = fromEmail
         self.signature = signature
         self.token = token
-        self.fetch = fetch ?? { try await GmailNetworking.session.data(for: $0) }
+        // The live default refuses inside a test run (backstage#5), so a test that forgets to inject
+        // a fetch fails by name instead of sending real mail.
+        self.fetch = fetch ?? { try await GmailNetworking.live($0) }
         self.onAuthExpired = onAuthExpired
     }
 
