@@ -24,3 +24,6 @@ test-test-harness.sh	suite	Covers lib/test-harness.sh.
 test-scopes-required.sh	suite	Proves a consumer naming no Gmail scopes does not compile, by building one (backstage#3).
 test-script-roles.sh	suite	Holds lib/script-roles.tsv to the scripts on disk, in both directions (backstage#10).
 test-package-identity.sh	suite	Refuses a script that spells a generated manifest's package identity or path out instead of deriving it (backstage#30).
+check-secrets-history.sh	workflow	Named by .github/workflows/secrets-history.yml. It reads every blob ever committed, which is the one question the working tree guard cannot answer (backstage#11).
+test-secrets-history.sh	suite	Covers check-secrets-history.sh.
+lib/secret_rules.py	library	What counts as a credential or a real mailbox. Imported by check-secrets.sh and check-secrets-history.sh, so the two cannot disagree. Never run.
