@@ -229,6 +229,95 @@ struct GmailAuthManagerTests {
         #expect(m.beginConnectAttempt())
     }
 
+    // ---------- backstage#25: the page claims only what is true when it is shown ----------
+
+    // The tab is answered the moment the CODE arrives, before the exchange and the save, either of
+    // which can still fail. So the page may not say the account is connected (L12, L11): here the
+    // exchange fails, and the person must not have been told otherwise.
+    @Test func theRedirectPageNeverClaimsAConnectionItHasNotMade() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let page = Box<String?>(nil)
+        let m = try manager(dir,
+            fetch: { [self] req in self.response(400, #"{"error":"invalid_grant"}"#, req) },
+            openBrowser: { url in
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let state = items.first { $0.name == "state" }?.value ?? ""
+                let redirect = items.first { $0.name == "redirect_uri" }?.value ?? ""
+                Task.detached {
+                    let got = try? await URLSession(configuration: .ephemeral)
+                        .data(from: URL(string: "\(redirect)/?code=c&state=\(state)")!)
+                    page.value = got.map { String(decoding: $0.0, as: UTF8.self) } ?? ""
+                }
+            })
+        do { try await m.connect(); Issue.record("expected the exchange to fail") } catch { }
+        for _ in 0..<500 where page.value == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        let shown = try #require(page.value).lowercased()
+        #expect(!shown.contains("connected"), "the tab claimed a connection: \(shown)")
+        #expect(shown.contains("return to"), "the tab should send the person back to the app")
+    }
+
+    // ---------- backstage#15: a blip and an outage are different events ----------
+
+    private func failingRefresh(_ dir: URL, status: Int = 503, clock: Box<Date>) throws -> GmailAuthManager {
+        try writeClient(dir)
+        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
+        let answer = Box(status)
+        return try GmailAuthManager(credentialsDirectory: dir, scopes: scopes,
+            now: { clock.value },
+            fetch: { [self] req in
+                answer.value == 200
+                    ? self.response(200, #"{"access_token":"at","expires_in":1}"#, req)
+                    : self.response(answer.value, "gateway", req)
+            })
+    }
+
+    @Test func oneTemporaryFailureIsABlipNotAnOutage() async throws {
+        let clock = Box(t0)
+        let m = try failingRefresh(try scratch(), clock: clock)
+        _ = try? await m.validAccessToken()
+        #expect(m.refreshHealth.consecutiveTemporaryFailures == 1)
+        #expect(m.refreshHealth.failingSince == t0)
+        #expect(!m.refreshHealth.isSustained)
+    }
+
+    // Three in a row with no success between them is an outage, and it says since WHEN, which is
+    // what lets a consumer say "Gmail has not refreshed since 14:02" rather than "try again" for ever.
+    @Test func consecutiveTemporaryFailuresBecomeAnOutageNamingWhenItBegan() async throws {
+        let clock = Box(t0)
+        let m = try failingRefresh(try scratch(), clock: clock)
+        for minute in 0..<3 {
+            clock.value = t0.addingTimeInterval(TimeInterval(minute * 60))
+            _ = try? await m.validAccessToken()
+        }
+        #expect(m.refreshHealth.consecutiveTemporaryFailures == 3)
+        #expect(m.refreshHealth.isSustained)
+        #expect(m.refreshHealth.failingSince == t0, "the outage is dated from its FIRST failure")
+    }
+
+    @Test func theRunIsResetBySuccessOnTheSameManager() async throws {
+        let clock = Box(t0)
+        let dir = try scratch(); try writeClient(dir)
+        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
+        let answer = Box(503)
+        let m = try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, now: { clock.value },
+            fetch: { [self] req in
+                answer.value == 200 ? self.response(200, #"{"access_token":"at","expires_in":1}"#, req)
+                                    : self.response(503, "gateway", req) })
+        for _ in 0..<3 { _ = try? await m.validAccessToken() }
+        answer.value = 200
+        _ = try await m.validAccessToken()
+        #expect(m.refreshHealth == .healthy)
+    }
+
+    // A dead login is not a temporary failure and must not be counted as one: it has its own state,
+    // the cleared tokens, and its own remedy.
+    @Test func aDeadLoginIsNotCountedAsATemporaryFailure() async throws {
+        let clock = Box(t0)
+        let m = try failingRefresh(try scratch(), status: 401, clock: clock)
+        _ = try? await m.validAccessToken()
+        #expect(m.refreshHealth == .healthy)
+    }
+
     // ---------- the package carries no consumer's voice ----------
 
     @Test func noMessageNamesAnyApp() {

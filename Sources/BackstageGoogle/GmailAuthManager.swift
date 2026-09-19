@@ -49,6 +49,30 @@ public final class GmailAuthManager {
         }
     }
 
+    // backstage#15: whether token refresh is having a blip or an outage.
+    //
+    // A temporary failure is deliberately answered "try again", because the other answer signs somebody
+    // out over a passing fault. But an error classified as expected must still be counted against a
+    // rate (L77), or one bad response and Google being unreachable for an hour arrive on the same path
+    // and look identical, and the only symptom a person sees is that mail quietly stops going out.
+    //
+    // So each temporary failure is counted, the run is dated from its FIRST failure (so a consumer can
+    // say "Gmail has not refreshed since 14:02", L589), and a success ends it. A dead login is not a
+    // temporary failure: it clears the tokens and has its own remedy, so it ends the run too.
+    public struct RefreshHealth: Equatable, Sendable {
+        public var consecutiveTemporaryFailures: Int
+        public var failingSince: Date?
+
+        // THREE, and why: one or two temporary failures are ordinary contention that the next attempt
+        // usually clears. Three in a row with no success between them is past what a person retrying
+        // by hand would call a blip, and it is the point at which "try again" stops being true.
+        public static let sustainedAfter = 3
+        public var isSustained: Bool { consecutiveTemporaryFailures >= Self.sustainedAfter }
+        public static let healthy = RefreshHealth(consecutiveTemporaryFailures: 0, failingSince: nil)
+    }
+
+    public private(set) var refreshHealth: RefreshHealth = .healthy
+
     public let scopes: [String]
     public let loginHint: String?
     private let clientURL: URL
@@ -218,13 +242,17 @@ public final class GmailAuthManager {
             stored.accessToken = tokens.accessToken
             stored.accessTokenExpiry = tokens.expiresIn.map { now.addingTimeInterval(TimeInterval($0)) }
             guard GmailCredentials.saveTokens(stored, to: tokenURL) else { throw AuthError.tokenSaveFailed }
+            refreshHealth = .healthy
             return tokens.accessToken
         case .failure(.authExpired):
+            refreshHealth = .healthy
             // The refresh token is dead. Clear it so the consumer shows disconnected, instead of failing
             // opaquely.
             GmailCredentials.clearTokens(at: tokenURL)
             throw AuthError.authExpired
         case .failure(.transient):
+            refreshHealth.consecutiveTemporaryFailures += 1
+            if refreshHealth.failingSince == nil { refreshHealth.failingSince = now }
             throw AuthError.refreshFailed(String(data: data, encoding: .utf8) ?? "unknown")
         }
     }
@@ -311,7 +339,10 @@ public final class GmailAuthManager {
         }
         log?("redirect received by the listener")
 
-        let body = "<html><body style='font-family:-apple-system;padding:40px'>Gmail is connected. You can close this tab.</body></html>"
+        // backstage#25: the page says only what is true WHEN IT IS SHOWN. It is answered the moment the
+        // code arrives, before the exchange and the save, either of which can still fail, so it must not
+        // say the account is connected (L12, L11). The app reports the real outcome where the person is.
+        let body = "<html><body style='font-family:-apple-system;padding:40px'>Google's response reached the app. You can close this tab and return to it.</body></html>"
         let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
         conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in conn.cancel() })
 
