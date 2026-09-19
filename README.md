@@ -16,6 +16,26 @@ alter and delete mail. An over broad permission is invisible, because the code
 never attempts what it is not meant to do, while a missing one fails loudly on
 the first run.
 
+## What the package tells a consumer about its own health
+
+Every response body this package could not decode is recorded with the endpoint
+it came from and why, and `ResponseDecodeHealth.shared` is how a consumer reads
+that back:
+
+    for endpoint in ResponseDecodeHealth.shared.failing() {
+        print(endpoint.endpoint, endpoint.consecutiveFailures, endpoint.lastReason ?? "")
+    }
+
+`current()` is every endpoint that has failed at least once, sorted by name.
+`failing()` is the subset whose failures have reached `failingRun` in a row,
+which is the condition the package judges by and is published so a consumer
+wording a status line around it reads the same number.
+
+**The package picks no surface for it.** Three apps share this, so a status
+line, a log entry or an alert chosen here would be chosen for all three. What it
+owes them is the fact and the threshold; what to do with it is each consumer's
+decision.
+
 ## This repository is public on purpose, and temporarily
 
 Actions is unlimited on a public repository. A private one on the Free plan gets
