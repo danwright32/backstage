@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets guard tests" 47
+harness_begin "secrets guard tests" 52
 
 TARGET="scripts/check-secrets.sh"
 require_target "$TARGET"
@@ -273,6 +273,55 @@ OUT="$("$NOLIB/check-secrets.sh" "$D" 2>&1)"; CODE=$?
 check "without its rules the guard refuses rather than reporting a finding" "$CODE" "2"
 check "and it names the library that could not be read" \
     "$(says "$OUT" "secret_rules.py")" "yes"
+
+# --- an address among bytes that are not text is not an address (backstage#36) ---
+#
+# On 2026-09-19 a green push was refused on two mailbox findings in a Swift
+# compiler intermediate: 133,872 bytes, 62% printable, and both matches 6
+# characters long, a one character local part and a four character domain. That
+# is binary noise that happens to satisfy the shape the rule looks for, and the
+# same tree passed once the build cache was rebuilt. A gate whose verdict depends on what the compiler
+# happened to emit is one people learn to override (L36, L491).
+#
+# THE NARROWING IS THE MAILBOX RULE ALONE, and the reason is measurable rather
+# than a preference: every credential rule needs a documented prefix plus twenty
+# or more characters, which random bytes do not produce, so only this one can
+# fire on noise. Each case below pins one half of that.
+D="$(ordinary binary-noise)"
+mkdir -p "$D/.build"
+printf 'noise\000more %s noise\000\001\002\n' "someone""@""ab.cd" > "$D/.build/Compiler.priors"
+run_guard "$D"
+check "an address among bytes that are not text is not a finding" "$CODE" "0"
+
+# AND THE SAME ADDRESS IN A TEXT FILE IS STILL REFUSED, so what was narrowed is
+# the content the rule reads and not the rule (L104).
+D="$(ordinary same-address-in-text)"
+printf 'to: %s\n' "someone""@""ab.cd" > "$D/Contact.swift"
+run_guard "$D"
+check "the same address in a text file is still refused" \
+    "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+
+# THE CREDENTIAL RULES STILL READ EVERY BYTE. This is the case that keeps the
+# narrowing honest: a secret can reach a build product by routes the source
+# never shows, and that is why build output is scanned at all (Dan's sign off
+# 2026-09-19). A fix that quietly stopped reading binaries would have taken that
+# with it, and nothing in the mailbox change would have said so.
+D="$(ordinary credential-in-binary)"
+mkdir -p "$D/.build"
+printf 'noise\000\001 k = "%s" \000\002\n' "$CLIENT_SECRET" > "$D/.build/Product.o"
+run_guard "$D"
+check "a credential in a file that is not text is still refused" \
+    "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+check "and it still names the rule that fired" "$(says "$OUT" "oauth-client-secret")" "yes"
+
+# TEXT IS NOT THE SAME AS ASCII. A source file carrying an accented name decodes
+# perfectly well and must keep its mailbox protection, or the narrowing would
+# quietly exempt every file written by anyone outside one alphabet.
+D="$(ordinary accented-text)"
+printf 'author: Ren\303\251e Fran\303\247ois\nto: %s\n' "$REAL_MAILBOX" > "$D/Credits.swift"
+run_guard "$D"
+check "a text file carrying non ASCII still has its mailbox rule" \
+    "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
 
 # NOTHING TO EXAMINE IS NOT A PASS (L98). This is what stands in for the port
 # source's empty derivation refusal.

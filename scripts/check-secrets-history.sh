@@ -50,7 +50,7 @@ import sys
 # a finding rather than as a check that could not run (L11, L98).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 try:
-    from secret_rules import CREDENTIAL_FILENAMES, findings_in
+    from secret_rules import CREDENTIAL_FILENAMES, findings_in_bytes
 except ImportError as error:
     print("REFUSED: scripts/lib/secret_rules.py could not be imported (%s)." % error)
     print("    The rules this guard applies live there, so nothing was checked.")
@@ -164,8 +164,7 @@ def main():
         examined += 1
         if CREDENTIAL_FILENAMES.search(os.path.basename(path)):
             findings.append(("credential-store", sha, path, 0))
-        text = content.stdout.decode("utf-8", errors="replace")
-        for rule, number, _value in findings_in(text):
+        for rule, number, _value in findings_in_bytes(content.stdout):
             findings.append((rule, sha, path, number))
 
     if examined == 0:
