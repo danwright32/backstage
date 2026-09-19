@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets guard tests" 27
+harness_begin "secrets guard tests" 30
 
 TARGET="scripts/check-secrets.sh"
 require_target "$TARGET"
@@ -76,6 +76,24 @@ D="$(ordinary reserved-tlds)"
 printf 'a@fixture.invalid b@fixture.test\n' > "$D/Fixtures.swift"
 run_guard "$D"
 check "a reserved TLD is not a mailbox" "$CODE" "0"
+
+# A SUBDOMAIN OF A RESERVED DOMAIN IS RESERVED TOO (backstage#18, Dan's sign off 2026-09-19).
+# Everything beneath example.com belongs to it and can never resolve to a real mailbox, and it is
+# the natural shape of a Message-ID's host, which is where the over match was found.
+D="$(ordinary reserved-subdomain)"
+printf 'id: <abc@mail.example.com>\nalso: x@a.b.example.org\n' > "$D/Threading.swift"
+run_guard "$D"
+check "an address under a reserved domain is documentation" "$CODE" "0"
+
+# AND A REAL DOMAIN DRESSED AS ONE IS STILL REFUSED. A suffix test written carelessly accepts
+# these, which is the whole risk of widening a privacy control, so each shape has its own case.
+D="$(ordinary lookalike-suffix)"; printf 'to: %s\n' "someone""@""example.com.attacker.org" > "$D/A.swift"
+run_guard "$D"
+check "a real domain that merely CONTAINS a reserved one is refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+
+D="$(ordinary lookalike-prefix)"; printf 'to: %s\n' "someone""@""notexample.com" > "$D/A.swift"
+run_guard "$D"
+check "a real domain that merely ENDS in the same letters is refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
 
 # EXEMPT FOR A REASON, not as one named case (L362): a service SSH login is not
 # a mailbox, because nobody receives mail at it.

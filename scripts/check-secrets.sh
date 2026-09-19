@@ -70,7 +70,14 @@ SKIP_DIRS = {".git"}
 def mailbox_is_reserved(address):
     domain = address.rsplit("@", 1)[1].lower()
     local = address.rsplit("@", 1)[0].lower()
-    if domain in RESERVED_DOMAINS or domain.endswith(RESERVED_TLDS):
+    # A SUBDOMAIN of a reserved domain is reserved too (backstage#18, Dan's sign off 2026-09-19):
+    # everything beneath example.com belongs to it. Matched as the whole domain or a dot then the
+    # whole domain, never a bare suffix, so notexample.com and example.com.attacker.org, both real
+    # and registrable, are still refused. That is the risk of widening a privacy control, and a
+    # test pins each shape.
+    if any(domain == d or domain.endswith("." + d) for d in RESERVED_DOMAINS):
+        return True
+    if domain.endswith(RESERVED_TLDS):
         return True
     if local == "git" and domain in CODE_HOSTS:
         return True
