@@ -26,7 +26,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 REPO_ROOT="$(pwd)"
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "ported content tests" 25
+harness_begin "ported content tests" 27
 
 TARGET="scripts/check-ported-content.sh"
 require_target "$TARGET"
@@ -242,16 +242,55 @@ check "a tree with no ported artifact is refused, not passed" "$CODE" "3"
 # is two pieces of code that each enumerate the artifacts, and it is paid down
 # here: they are asserted to find the SAME SET, so a drift between the two is a
 # red suite rather than a silent hole (L582, L370).
-SIBLINGS_HERE=no
-if ./scripts/check-ported-artifacts.sh 2>&1 | grep -q '^OK: '; then SIBLINGS_HERE=yes; fi
+# WHETHER THE SIBLINGS ARE HERE IS DECIDED FROM CAPTURED TEXT, NEVER THROUGH A
+# PIPE. The first version of this ran the other check straight into `grep -q`,
+# and under `pipefail` a consumer that exits on its first match kills the
+# producer, so the pipeline always reported failure and this always answered
+# "no" (L183). Every real tree assertion below then stood down on every machine,
+# for ever, while the suite went on printing a full count of passes: a stand
+# down that always stands down is not a stand down, it is the check not being
+# there (L98, L324).
+siblings_from() {
+    case "$1" in
+        *"OK: "*) echo yes ;;
+        *) echo no ;;
+    esac
+}
+
+# The classifier itself, driven both ways, so what decides whether the real
+# cases run is covered rather than merely written.
+check "a report naming a verified port means the siblings are here" \
+    "$(siblings_from "OK: scripts/lib/test-harness.sh  (owner/repo path @ abc123)")" "yes"
+check "a report naming none of them means they are not" \
+    "$(siblings_from "CANNOT MEASURE: the sibling repository owner/repo is not on this machine")" "no"
+
+ARTIFACTS_OUT="$(./scripts/check-ported-artifacts.sh 2>&1)"
+SIBLINGS_HERE="$(siblings_from "$ARTIFACTS_OUT")"
 check_with_siblings() {
     if [ "$SIBLINGS_HERE" = yes ]; then check "$1" "$2" "$3"
     else check "$1 (not run: no sibling checkouts here)" "unmeasurable" "unmeasurable"; fi
 }
 
 REAL_OUT="$("./$TARGET" 2>&1)"; REAL_CODE=$?
-check_with_siblings "every real port here is accounted for" "$REAL_CODE" "0"
-check_with_siblings "and none of them has drifted" "$(counts "$REAL_OUT" '^DRIFTED:')" "0"
+
+# DRIFT IS ASSERTED SEPARATELY FROM MEASURABILITY, and that split is what keeps
+# this runnable away from a network (L11). Reading whether an authorising issue
+# is still open needs gh and a connection; a laptop offline, or signed out, gets
+# CANNOT MEASURE for those and the check exits non zero. Holding the whole suite
+# to exit 0 would have meant no push could be made offline, for a question that
+# has nothing to do with whether anything drifted.
+#
+# What must NEVER stand down is the drift count: that is read from the files on
+# this disk and needs nothing outside them.
+REAL_UNMEASURED="$(printf '%s' "$REAL_OUT" | grep -cE '^CANNOT MEASURE:' || true)"
+check_with_siblings "no real port has drifted or outlived its authorisation" \
+    "$(printf '%s' "$REAL_OUT" | grep -cE '^(DRIFTED|EDITED SINCE IT WAS PORTED|AUTHORISATION EXPIRED):' || true)" "0"
+if [ "$REAL_UNMEASURED" -gt 0 ]; then
+    check "every real port was measurable (not run: $REAL_UNMEASURED could not be measured here)" \
+        "unmeasurable" "unmeasurable"
+else
+    check_with_siblings "every real port here is accounted for" "$REAL_CODE" "0"
+fi
 
 MINE="$(printf '%s' "$REAL_OUT" | grep -E '^(IN STEP|ADAPTED|DIVERGED|DRIFTED|EDITED SINCE IT WAS PORTED|AUTHORISATION EXPIRED|CANNOT MEASURE): ' | sed -E 's/^[A-Z ]+: //' | sed 's/ .*//' | sort -u)"
 THEIRS="$(./scripts/check-ported-artifacts.sh 2>&1 | grep -E '^(OK|NOT ON MAIN|COMMIT NOT FOUND|CANNOT MEASURE|UNREADABLE HEADER): ' | sed -E 's/^[A-Z ]+: //' | sed 's/ .*//' | sort -u)"
