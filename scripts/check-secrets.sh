@@ -64,7 +64,15 @@ CREDENTIAL_FILENAMES = re.compile(
     re.IGNORECASE,
 )
 
-SKIP_DIRS = {".git"}
+# Skipped, each for its reason (L362):
+#   .git                             not the working tree; it holds every historical version
+#   SDKExplicitPrecompiledModules    precompiled copies of APPLE'S OWN frameworks that the build
+#                                    drops into the cache. Apple's bytes, not this repository's,
+#                                    and their binary noise matches the mailbox rule. ONLY this
+#                                    folder: our own compiled output beside it is still read,
+#                                    because a secret can reach it by routes the source hides
+#                                    (Dan's sign off 2026-09-19, L324).
+SKIP_DIRS = {".git", "SDKExplicitPrecompiledModules"}
 
 
 def mailbox_is_reserved(address):

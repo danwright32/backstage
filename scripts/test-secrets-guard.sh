@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets guard tests" 30
+harness_begin "secrets guard tests" 32
 
 TARGET="scripts/check-secrets.sh"
 require_target "$TARGET"
@@ -94,6 +94,25 @@ check "a real domain that merely CONTAINS a reserved one is refused" "$( [ "$COD
 D="$(ordinary lookalike-prefix)"; printf 'to: %s\n' "someone""@""notexample.com" > "$D/A.swift"
 run_guard "$D"
 check "a real domain that merely ENDS in the same letters is refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+
+# APPLE'S PRECOMPILED SDK MODULES ARE NOT THIS REPOSITORY'S CONTENT (Dan's sign off 2026-09-19).
+# The build drops precompiled copies of Apple's own frameworks into a folder of that name, and their
+# binary noise contains strings the mailbox rule reads as addresses. They are Apple's bytes, not
+# anything written here, so that one folder is skipped.
+D="$(ordinary apple-sdk-cache)"
+mkdir -p "$D/.build/out/SDKExplicitPrecompiledModules"
+printf 'noise %s noise\n' "x""@""kx.hj" > "$D/.build/out/SDKExplicitPrecompiledModules/Spatial-ABC.pcm"
+run_guard "$D"
+check "Apple's precompiled SDK modules are not scanned" "$CODE" "0"
+
+# THE SKIP IS THAT ONE FOLDER, NOT THE BUILD CACHE. Our own compiled code sits beside it and can
+# carry a secret the source no longer shows, which is why the build cache is read at all (L324: a
+# stand down condition no broader than its reason).
+D="$(ordinary own-build-output)"
+mkdir -p "$D/.build/out/Products/Debug"
+printf 'k = %s\n' "$CLIENT_SECRET" > "$D/.build/out/Products/Debug/BackstageGoogle.o"
+run_guard "$D"
+check "our own compiled output beside it is still scanned" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
 
 # EXEMPT FOR A REASON, not as one named case (L362): a service SSH login is not
 # a mailbox, because nobody receives mail at it.
