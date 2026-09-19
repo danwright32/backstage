@@ -3,7 +3,9 @@
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
 //
-// TAKEN WHOLE AND UNCHANGED. There is no OAuth flow without it: it is the local server that
+// TAKEN WHOLE, then given an injectable sleep and bind (backstage#13) so its retry schedule is
+// testable without waiting; the defaults are the origin's own. There is no OAuth flow without it: it is
+// the local server that
 // catches Google's redirect back to the app. Internal: only the auth manager calls it.
 import Foundation
 import Network
@@ -92,8 +94,16 @@ enum LoopbackListener {
         queue: DispatchQueue,
         timeout: TimeInterval = LoopbackListener.defaultTimeout,
         log: (@Sendable (String) -> Void)? = nil,
+        // backstage#13: the retry pause and the bind itself are injectable, so the retry schedule can
+        // be asserted from the delays it ASKED FOR rather than lived through (L524). The defaults are
+        // the origin's real clock and real bind.
+        sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+        bind: ((TimeInterval) async throws -> (listener: NWListener, port: UInt16))? = nil,
         onConnection: @escaping @Sendable (NWConnection) -> Void
     ) async throws -> (listener: NWListener, port: UInt16) {
+        let attemptBind = bind ?? { budget in
+            try await startOnce(queue: queue, timeout: budget, log: log, onConnection: onConnection)
+        }
         let deadline = Date().timeIntervalSince1970 + timeout
         var lastError: Error = LoopbackError.timedOut
 
@@ -103,7 +113,7 @@ enum LoopbackListener {
             // here would be waiting past the moment the person was promised.
             guard budget > 0 else { break }
             do {
-                return try await startOnce(queue: queue, timeout: budget, log: log, onConnection: onConnection)
+                return try await attemptBind(budget)
             } catch let error as LoopbackError {
                 guard case .bindRefusedForNow(let message) = error, attempt < bindAttempts
                 else { throw error }
@@ -111,7 +121,7 @@ enum LoopbackListener {
                 // copy-inventory:ignore-start  developer diagnostic log, not the app's voice (#915)
                 log?("bind refused (\(message)); attempt \(attempt) of \(bindAttempts), trying again")
                 // copy-inventory:ignore-end
-                try? await Task.sleep(nanoseconds: UInt64(bindRetryDelay * 1_000_000_000))
+                try? await sleep(bindRetryDelay)
             }
         }
         throw lastError
