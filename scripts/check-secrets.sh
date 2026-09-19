@@ -33,9 +33,29 @@ working tree and holds every historical version of every file.
 
 EXEMPTIONS ARE WRITTEN AS THE REASON FOR EXEMPTING, never as one named case, so
 they keep covering the second case that satisfies the same reason (L362).
+
+ONE SECRET IS ONE FINDING, however many build products carry it (backstage#19).
+Walking the build output is the point, but on 2026-09-19 one fixture line came
+back as 44 findings in 3 files: 4 in the source and 40 in the compiled object
+file and the test bundle, which hold the same string. A report where the line
+that matters is buried under forty copies of itself is one people learn to skim
+(L36), and a count inflated tenfold by build output reads as ten times the
+problem. So occurrences of the SAME value are grouped: the ones in files git
+tracks are listed, and the rest are counted beside them with the first named.
+
+A VALUE THAT APPEARS ONLY IN UNTRACKED FILES IS REPORTED IN FULL, because that is
+the case where the build product is the only evidence there is, and a secret can
+reach one by routes the source never shows.
+
+WHAT IS TRACKED IS ASKED OF GIT, with git's own environment variables stripped,
+because an inherited GIT_DIR beats `git -C` and this runs from a pre push hook,
+which is where git exports them. A tree that is not a checkout cannot be asked,
+so nothing is grouped there and the run SAYS so rather than leaving a reader to
+infer it from a longer list (L98).
 """
 import os
 import re
+import subprocess
 import sys
 
 # Domains reserved by RFC 2606 and RFC 6761 precisely so that they can be written
@@ -93,16 +113,85 @@ def mailbox_is_reserved(address):
 
 
 def findings_in(text):
-    """Every finding in one file's text, as (rule, line number)."""
+    """Every finding in one file's text, as (rule, line number, the matched value).
+
+    The value is carried so that occurrences of the SAME secret can be grouped.
+    It is never printed, and never leaves this process: a guard that reports a
+    leaked secret by quoting it has leaked it a second time (L222).
+    """
     found = []
     for number, line in enumerate(text.splitlines(), start=1):
         for rule, pattern in CONTENT_RULES:
-            if pattern.search(line):
-                found.append((rule, number))
+            match = pattern.search(line)
+            if match:
+                found.append((rule, number, match.group()))
         for address in EMAIL.findall(line):
             if not mailbox_is_reserved(address):
-                found.append(("mailbox", number))
+                found.append(("mailbox", number, address))
     return found
+
+
+def tracked_files(root):
+    """Every path git holds in its index for the tree at root, relative to root.
+
+    Returns (paths, why not). `paths` is None when the question could not be
+    asked at all, which is a different fact from an empty index: a checkout with
+    nothing staged HAS been asked and answered.
+
+    THE TWO WAYS IT CANNOT BE ASKED ARE NAMED SEPARATELY (L11). A tree that is
+    not a checkout and a machine with no git are different causes, and a message
+    saying "not a git checkout" on a machine that simply has no git claims
+    something this never measured.
+
+    GIT'S OWN ENVIRONMENT VARIABLES ARE STRIPPED. An inherited GIT_DIR BEATS the
+    -C, and git exports GIT_DIR to its hooks, which is where this runs.
+    """
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        finished = subprocess.run(["git", "-C", root, "ls-files", "-z"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  env=environment, check=False)
+    except OSError:
+        return None, "git is not on this machine"
+    if finished.returncode != 0:
+        return None, "%s is not a git checkout" % root
+    listed = finished.stdout.decode("utf-8", errors="replace").split("\0")
+    return {path for path in listed if path}, None
+
+
+def grouped(findings, tracked):
+    """The findings to LIST, and how many occurrences each one stands for.
+
+    Grouped by rule and value, because that pair is what one secret is. A
+    credential store has no value to match on, so its group is its file name,
+    which is the thing the rule fired on.
+
+    Returns (rows, suppressed), where a row is (rule, path, line, copies, first
+    copy) and `copies` counts occurrences of the same value in files git does
+    not track.
+    """
+    groups = {}
+    for rule, path, number, value in findings:
+        key = (rule, value if value is not None else os.path.basename(path))
+        groups.setdefault(key, []).append((rule, path, number))
+
+    rows = []
+    suppressed = 0
+    for occurrences in groups.values():
+        listed = [o for o in occurrences if o[1] in tracked]
+        copies = [o for o in occurrences if o[1] not in tracked]
+        if not listed:
+            # NOTHING TRACKED CARRIES THIS VALUE, so every occurrence is
+            # reported: the build product is the only evidence there is.
+            rows.extend((rule, path, number, 0, None) for rule, path, number in copies)
+            continue
+        suppressed += len(copies)
+        first_copy = sorted(copies, key=lambda o: (o[1], o[2]))[0] if copies else None
+        for index, (rule, path, number) in enumerate(sorted(listed, key=lambda o: (o[1], o[2]))):
+            # The copies are counted once for the group, against its first
+            # source, rather than repeated against each one.
+            rows.append((rule, path, number, len(copies) if index == 0 else 0, first_copy))
+    return sorted(rows), suppressed
 
 
 def main():
@@ -122,7 +211,7 @@ def main():
                 continue
             examined += 1
             if CREDENTIAL_FILENAMES.search(name):
-                findings.append(("credential-store", relative, 0))
+                findings.append(("credential-store", relative, 0, None))
             try:
                 with open(path, "rb") as handle:
                     # Decoded with replacement rather than skipped on a bad byte:
@@ -134,20 +223,39 @@ def main():
                 print("REFUSED: %s could not be read (%s), so the tree was not fully checked."
                       % (relative, error.__class__.__name__))
                 return 2
-            for rule, number in findings_in(text):
-                findings.append((rule, relative, number))
+            for rule, number, value in findings_in(text):
+                findings.append((rule, relative, number, value))
 
     if examined == 0:
         print("REFUSED: examined 0 files under %s, so nothing was checked." % root)
         return 2
 
     if findings:
-        files = sorted({path for _, path, _ in findings})
+        tracked, ungroupable = tracked_files(root)
+        rows, suppressed = grouped(findings, tracked if tracked is not None else set())
+        files = sorted({path for _, path, _, _, _ in rows})
         print("REFUSED: %d finding(s) in %d file(s). The value itself is never printed."
-              % (len(findings), len(files)))
-        for rule, path, number in sorted(findings):
+              % (len(rows), len(files)))
+        if suppressed:
+            print("    %d further occurrence(s) hold a value already reported above and are"
+                  % suppressed)
+            print("    counted against it rather than listed: they are copies, and the")
+            print("    tracked file named above is where the remedy is.")
+        if ungroupable:
+            # SAID, NOT INFERRED, AND IT NAMES WHICH QUESTION WENT UNASKED.
+            # Without this line a reader has no way to tell a tree whose copies
+            # could not be grouped from one that had none (L98, L11).
+            print("    %s, so nothing could be asked about what is tracked and no"
+                  % ungroupable)
+            print("    occurrence was grouped as a copy of another.")
+        for rule, path, number, copies, first_copy in rows:
             where = "%s line %d" % (path, number) if number else path
             print("  RULE %-22s %s" % (rule, where))
+            if copies:
+                _, copy_path, copy_number = first_copy
+                print("      + %d untracked copy(ies) of this value, the first at %s"
+                      % (copies, "%s line %d" % (copy_path, copy_number) if copy_number
+                         else copy_path))
         return 1
 
     print("clean: examined %d files, 0 findings." % examined)
