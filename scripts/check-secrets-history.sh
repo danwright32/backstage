@@ -62,6 +62,20 @@ except ImportError as error:
 # blob over it is itself worth a look.
 LARGEST_BLOB_READ = 10 * 1024 * 1024
 
+# How many distinct blobs are placed in a commit before the run stops asking.
+#
+# backstage#42. Placing one is `git log --all --find-object`, a full walk of
+# every commit in this repository, and it is asked once per blob. A clean run
+# asks nothing, so the cost is never paid until the run that finds a lot, which
+# is the run whose report matters most: with the job's timeout spent walking
+# history, the run that found the most would say the least (L492).
+#
+# So the report comes out first and this is decoration, bounded, and it says how
+# many it did not place rather than stopping quietly (L98). Overridable, so the
+# suite can drive the bound without committing thirty secrets to a fixture; the
+# default is the real one and a test asserts it.
+LARGEST_PLACEMENT_RUN = 25
+
 
 def git(repo, *arguments, **kwargs):
     """Ask git, with ITS OWN environment variables stripped.
@@ -124,6 +138,34 @@ def commit_holding(repo, sha, path):
     return line[0] if line else None
 
 
+def place_each_blob(repo, findings, limit):
+    """Say which commit each finding's blob sits in, AFTER the report is out.
+
+    Decoration, never the report. Distinct blobs only, because several findings
+    in one file share a blob and placing it twice is the same walk twice.
+    """
+    distinct = []
+    for _rule, sha, path, _number in findings:
+        if (sha, path) not in distinct:
+            distinct.append((sha, path))
+
+    print("    WHERE EACH ONE SITS. This is a full walk of the history per blob, so it")
+    print("    comes after the report above rather than inside it.")
+    for index, (sha, path) in enumerate(distinct):
+        if index >= limit:
+            remaining = len(distinct) - limit
+            print("      %d further blob(s) were NOT placed. That is a bound on this"
+                  % remaining)
+            print("      decoration, not on the findings: every one of them is listed above.")
+            print("      Place one by hand with:")
+            print("          git log --all --find-object=<blob> -- <path>")
+            return
+        placed = commit_holding(repo, sha, path)
+        print("      blob %s at %s: %s"
+              % (sha[:8], path, "commit " + placed if placed
+                 else "no commit could be found holding it"))
+
+
 def main():
     repo = sys.argv[1] if len(sys.argv) > 1 else "."
     if not os.path.isdir(repo):
@@ -182,17 +224,24 @@ def main():
               % len(findings))
         print("    never printed. These are blobs that are still reachable, whatever the")
         print("    working tree looks like now.")
-        for rule, sha, path, number in sorted(findings, key=lambda f: (f[2], f[3], f[0])):
+        # EVERYTHING FOUND, AND THE REMEDY, BEFORE ANYTHING IS LOOKED UP. Both
+        # are computed already; the placement below is not (L492).
+        ordered = sorted(findings, key=lambda f: (f[2], f[3], f[0]))
+        for rule, sha, path, number in ordered:
             where = "%s line %d" % (path, number) if number else path
-            placed = commit_holding(repo, sha, path)
-            print("  RULE %-22s %s" % (rule, where))
-            print("      blob %s, %s" % (sha[:8], "commit " + placed if placed
-                                         else "no commit could be found holding it"))
+            print("  RULE %-22s %s   blob %s" % (rule, where, sha[:8]))
         print("")
         print("    THE REMEDY IS TO ROTATE THE CREDENTIAL, not to rewrite this history.")
         print("    Anything that was public has been fetchable by anyone for as long as it")
         print("    was there, and by forks and caches afterwards. Revoke it at Google,")
         print("    issue a new one, and keep the new one out of this repository.")
+        print("")
+
+        limit = LARGEST_PLACEMENT_RUN
+        override = os.environ.get("BACKSTAGE_PLACEMENT_LIMIT")
+        if override and override.isdigit():
+            limit = int(override)
+        place_each_blob(repo, ordered, limit)
         return 1
 
     print("clean: read %d of %d committed blob(s), %d not read, 0 findings."

@@ -23,7 +23,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets history tests" 22
+harness_begin "secrets history tests" 29
 
 TARGET="scripts/check-secrets-history.sh"
 WORKING_TREE_GUARD="scripts/check-secrets.sh"
@@ -143,6 +143,54 @@ commit_paths "$D" "and a credential among them" Compiled.bin
 run_history "$D"
 check "a credential among those same bytes still is" \
     "$( [ "$CODE" -eq 1 ] && echo refused || echo "exit $CODE" )" "refused"
+
+# THE REPORT COMES OUT BEFORE ANYTHING DECORATES IT (backstage#42, L492).
+#
+# Saying which commit a blob sits in is `git log --all --find-object`, a full
+# walk of every commit, once per blob. A clean run asks nothing, so that cost is
+# never paid until the run that finds a lot, which is the run whose report
+# matters most. Done inside the printing loop it would take the findings and the
+# remedy with it when the job's timeout arrived, so the run that found the most
+# would say the least.
+#
+# THE ORDER IS THE ASSERTION, so these compare line numbers rather than presence:
+# a check that both things appear is satisfied by any order, including the one
+# that loses everything (L228).
+D="$(new_repo report-first)"
+printf 'a = "%s"\n' "$CLIENT_SECRET" > "$D/Leak.swift"
+commit_paths "$D" "a secret" Leak.swift
+remove_and_commit "$D" "tidied" Leak.swift
+run_history "$D"
+line_of() { printf '%s' "$1" | grep -n "$2" | head -1 | cut -d: -f1; }
+FINDING_AT="$(line_of "$OUT" 'RULE ')"
+REMEDY_AT="$(line_of "$OUT" 'ROTATE THE CREDENTIAL')"
+PLACED_AT="$(line_of "$OUT" 'WHERE EACH ONE SITS')"
+check "every finding is printed before any of them is placed in a commit" \
+    "$( [ -n "$FINDING_AT" ] && [ -n "$PLACED_AT" ] && [ "$FINDING_AT" -lt "$PLACED_AT" ] && echo before || echo after)" "before"
+check "and the remedy is printed before that too" \
+    "$( [ -n "$REMEDY_AT" ] && [ -n "$PLACED_AT" ] && [ "$REMEDY_AT" -lt "$PLACED_AT" ] && echo before || echo after)" "before"
+check "and the placement still happens, rather than being dropped" \
+    "$(says "$OUT" "commit ")" "yes"
+
+# AND IT IS BOUNDED. Past the limit it says how many it did not place rather
+# than stopping quietly, and every finding is still listed in full, because the
+# list is the report and the placement is decoration (L98).
+D="$(new_repo many-blobs)"
+for n in 1 2 3 4; do
+    printf 'k%s = "%s%s"\n' "$n" "$CLIENT_SECRET" "$n" > "$D/Leak$n.swift"
+done
+commit_paths "$D" "several secrets" Leak1.swift Leak2.swift Leak3.swift Leak4.swift
+OUT="$(BACKSTAGE_PLACEMENT_LIMIT=2 "$TARGET" "$D" 2>&1)"; CODE=$?
+check "past the limit it says how many blobs it did not place" \
+    "$(says "$OUT" "were NOT placed")" "yes"
+check "and every finding is still listed in full" \
+    "$(printf '%s' "$OUT" | grep -c 'RULE ')" "4"
+check "and it still refuses" "$CODE" "1"
+
+# THE DEFAULT IS ASSERTED, not only the seam, so a change to the real limit is
+# visible here rather than only in the file it lives in (L401).
+check "the limit the run actually uses is the documented one" \
+    "$(grep -c '^LARGEST_PLACEMENT_RUN = 25$' "$TARGET")" "1"
 
 # ---------------------------------------------------------------------------
 # NOTHING TO EXAMINE IS NOT A PASS (L98). A repository with no commits has no
