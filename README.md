@@ -48,6 +48,13 @@ access or refresh token, a real mailbox address or a credential store file
 anywhere in the tree, names which rule fired, and never prints the value it
 matched.
 
+**One value is one finding.** It walks the build output too, because a secret
+can reach a build product by routes the source never shows, so a single source
+line arrives as dozens of copies of itself. Occurrences of the same value in
+files git does not track are counted against the tracked file that carries it
+rather than listed one by one. A value found only in untracked files is still
+reported in full: there, the build product is the only evidence there is.
+
 ## Working in it
 
     ./scripts/install-git-hooks.sh   # once per clone

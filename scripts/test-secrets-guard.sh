@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets guard tests" 32
+harness_begin "secrets guard tests" 45
 
 TARGET="scripts/check-secrets.sh"
 require_target "$TARGET"
@@ -179,6 +179,86 @@ printf 'b = "%s"\n' "$ACCESS_TOKEN" > "$D/two.swift"
 run_guard "$D"
 check "the first violation does not hide the second" "$(says "$OUT" "two.swift")" "yes"
 check "both rules are named" "$(says "$OUT" "oauth-token")" "yes"
+
+# --- one secret, forty copies of it (backstage#19) ---
+#
+# The guard walks the whole tree, .build included, on purpose: the riskiest
+# content on a disk is what .gitignore excludes (L250). The cost showed on
+# 2026-09-19, when one fixture line came back as 44 findings in 3 files, 4 in the
+# source and 40 in the compiled object file and the test bundle, which carry the
+# same string. A report where the one line that matters is buried under forty
+# copies of itself is one people learn to skim (L36), and a count inflated
+# tenfold by build output reads as ten times the problem.
+#
+# WHAT IS TRACKED IS ASKED OF GIT, so the fixture is a real checkout with the
+# source staged. Staging is enough: ls-files reads the index, and an index needs
+# no identity to write, which a commit would.
+D="$(ordinary derived-copies)"
+printf 'k = "%s"\n' "$CLIENT_SECRET" > "$D/Config.swift"
+mkdir -p "$D/.build/Products/Debug"
+printf 'noise %s noise\n' "$CLIENT_SECRET" > "$D/.build/Products/Debug/BackstageGoogle.o"
+printf 'more %s more\n' "$CLIENT_SECRET" > "$D/.build/Products/Debug/Tests.xctest"
+( cd "$D" && git init -q -b main >/dev/null 2>&1 && git add Config.swift Ordinary.swift ) || true
+run_guard "$D"
+check "a secret in a tracked source is still refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+check "and the source it lives in is named" "$(says "$OUT" "Config.swift")" "yes"
+check "and the copies are not listed one by one" \
+    "$(printf '%s' "$OUT" | grep -c 'RULE ')" "1"
+check "but the copies are counted rather than dropped" \
+    "$(says "$OUT" "untracked copy")" "yes"
+check "and the count the reader sees is not inflated by them" \
+    "$(says "$OUT" "1 finding(s)")" "yes"
+check "and grouping them still never prints the value" "$(says "$OUT" "$CLIENT_SECRET")" "no"
+
+# A FINDING THAT EXISTS ONLY IN BUILD OUTPUT STAYS REPORTED IN FULL, because
+# that is the case where the build output is the only evidence there is. A secret
+# can reach a build product by routes the source never shows.
+D="$(ordinary only-in-build)"
+mkdir -p "$D/.build/Products/Debug"
+printf 'k = "%s"\n' "$ACCESS_TOKEN" > "$D/.build/Products/Debug/Only.o"
+( cd "$D" && git init -q -b main >/dev/null 2>&1 && git add Ordinary.swift ) || true
+run_guard "$D"
+check "a secret only in build output is refused" "$( [ "$CODE" -ne 0 ] && echo refused || echo allowed )" "refused"
+check "and the build product is named, since it is the only evidence" \
+    "$(says "$OUT" "Only.o")" "yes"
+
+# TWO DIFFERENT SECRETS IN ONE SOURCE ARE TWO FINDINGS, not one group. The
+# grouping is by value, so a report that collapsed them would hide one of them
+# behind the other.
+D="$(ordinary two-values-one-source)"
+printf 'a = "%s"\nb = "%s"\n' "$CLIENT_SECRET" "$ACCESS_TOKEN" > "$D/Config.swift"
+mkdir -p "$D/.build"
+printf '%s %s\n' "$CLIENT_SECRET" "$ACCESS_TOKEN" > "$D/.build/Both.o"
+( cd "$D" && git init -q -b main >/dev/null 2>&1 && git add Config.swift Ordinary.swift ) || true
+run_guard "$D"
+check "two different values in one file stay two findings" \
+    "$(printf '%s' "$OUT" | grep -c 'RULE ')" "2"
+
+# A TREE THAT IS NOT A CHECKOUT CANNOT BE ASKED WHAT IS TRACKED, and nothing is
+# grouped away on a guess: every occurrence is reported, exactly as before. The
+# run SAYS it could not group rather than leaving the reader to infer it (L98).
+D="$(ordinary not-a-checkout)"
+printf 'k = "%s"\n' "$CLIENT_SECRET" > "$D/Config.swift"
+mkdir -p "$D/.build"
+printf 'noise %s\n' "$CLIENT_SECRET" > "$D/.build/Copy.o"
+run_guard "$D"
+check "outside a checkout every occurrence is still reported" \
+    "$(printf '%s' "$OUT" | grep -c 'RULE ')" "2"
+check "and the run says why nothing was grouped" "$(says "$OUT" "not a git checkout")" "yes"
+
+# AND A MACHINE WITH NO GIT IS A DIFFERENT CAUSE FROM A TREE THAT IS NOT A
+# CHECKOUT (L11). Both leave the copies ungrouped, and a message naming the
+# wrong one sends the reader to look at the tree when the fault is the machine.
+# The fixture gives the guard a PATH holding python3 and nothing else, so git is
+# genuinely absent rather than stubbed into saying something.
+FAKE_BIN="$WORK/only-python"
+mkdir -p "$FAKE_BIN"
+ln -sf "$(command -v python3)" "$FAKE_BIN/python3"
+OUT="$(PATH="$FAKE_BIN" "$TARGET" "$D" 2>&1)"; CODE=$?
+check "with no git the findings are still all reported" \
+    "$(printf '%s' "$OUT" | grep -c 'RULE ')" "2"
+check "and the message names the machine, not the tree" \
+    "$(says "$OUT" "git is not on this machine")" "yes"
 
 # NOTHING TO EXAMINE IS NOT A PASS (L98). This is what stands in for the port
 # source's empty derivation refusal.
