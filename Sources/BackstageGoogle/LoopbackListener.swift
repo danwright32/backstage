@@ -97,12 +97,12 @@ enum LoopbackListener {
         // backstage#13: the retry pause and the bind itself are injectable, so the retry schedule can
         // be asserted from the delays it ASKED FOR rather than lived through (L524). The defaults are
         // the origin's real clock and real bind.
-        sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
         bind: ((TimeInterval) async throws -> (listener: NWListener, port: UInt16))? = nil,
         onConnection: @escaping @Sendable (NWConnection) -> Void
     ) async throws -> (listener: NWListener, port: UInt16) {
         let attemptBind = bind ?? { budget in
-            try await startOnce(queue: queue, timeout: budget, log: log, onConnection: onConnection)
+            try await startOnce(queue: queue, timeout: budget, log: log, sleep: sleep, onConnection: onConnection)
         }
         let deadline = Date().timeIntervalSince1970 + timeout
         var lastError: Error = LoopbackError.timedOut
@@ -131,6 +131,7 @@ enum LoopbackListener {
         queue: DispatchQueue,
         timeout: TimeInterval,
         log: (@Sendable (String) -> Void)?,
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void,
         onConnection: @escaping @Sendable (NWConnection) -> Void
     ) async throws -> (listener: NWListener, port: UInt16) {
         let params = NWParameters.tcp
@@ -155,7 +156,10 @@ enum LoopbackListener {
             // listener alone; only a genuine 10s timeout reaches cancel().
             let timeoutTask = Task {
                 do {
-                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    // backstage#13: the same injected sleep as the retry pause, so no wait in this file
+                    // runs on a clock a test cannot control. It must still THROW on cancellation, which
+                    // the default real sleep does, for the reason set out just above.
+                    try await sleep(timeout)
                 } catch {
                     return
                 }
