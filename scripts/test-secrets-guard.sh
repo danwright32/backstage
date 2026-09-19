@@ -22,7 +22,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets guard tests" 45
+harness_begin "secrets guard tests" 47
 
 TARGET="scripts/check-secrets.sh"
 require_target "$TARGET"
@@ -259,6 +259,20 @@ check "with no git the findings are still all reported" \
     "$(printf '%s' "$OUT" | grep -c 'RULE ')" "2"
 check "and the message names the machine, not the tree" \
     "$(says "$OUT" "git is not on this machine")" "yes"
+
+# THE RULES COME FROM A LIBRARY, AND A MISSING ONE IS A REFUSAL (backstage#11).
+# Both guards read what a secret is from scripts/lib/secret_rules.py, so neither
+# can drift from the other (L370). An import that fell through would exit 1, and
+# 1 is this script's code for A SECRET WAS FOUND, so a missing library would read
+# as a finding rather than as a check that never ran (L11, L98). The fixture is a
+# copy of the guard beside an empty lib, so the real one is never moved.
+NOLIB="$WORK/no-library"
+mkdir -p "$NOLIB/lib"
+cp "$TARGET" "$NOLIB/check-secrets.sh"
+OUT="$("$NOLIB/check-secrets.sh" "$D" 2>&1)"; CODE=$?
+check "without its rules the guard refuses rather than reporting a finding" "$CODE" "2"
+check "and it names the library that could not be read" \
+    "$(says "$OUT" "secret_rules.py")" "yes"
 
 # NOTHING TO EXAMINE IS NOT A PASS (L98). This is what stands in for the port
 # source's empty derivation refusal.

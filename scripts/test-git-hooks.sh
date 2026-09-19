@@ -36,6 +36,11 @@ make_repo() {
     [ -n "$WORK" ] || exit 1
     local d="$WORK/$1"; rm -rf "$d"; mkdir -p "$d/scripts/lib" "$d/scripts/git-hooks"
     cp "$REPO_ROOT/scripts/check-secrets.sh" "$d/scripts/"
+    # THE GUARD'S RULES COME FROM A LIBRARY (backstage#11), so a fixture without
+    # it gets a guard that refuses to run rather than one that runs. The fixture
+    # copies what the thing under test actually needs, and the guard saying so
+    # loudly rather than scanning nothing is the behaviour being relied on here.
+    cp "$REPO_ROOT/scripts/lib/secret_rules.py" "$d/scripts/lib/"
     cp "$REPO_ROOT/scripts/run-tests.sh" "$d/scripts/"
     cp "$REPO_ROOT/scripts/git-hooks/pre-push" "$d/scripts/git-hooks/"
     cp "$REPO_ROOT/scripts/install-git-hooks.sh" "$d/scripts/"

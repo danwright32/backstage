@@ -48,6 +48,23 @@ access or refresh token, a real mailbox address or a credential store file
 anywhere in the tree, names which rule fired, and never prints the value it
 matched.
 
+**And the history is read too, because deleting a secret from a public
+repository does not remove it.** It stays readable in the history, in forks, and
+in anything that cloned or cached it, so the case that matters most, a
+credential that WAS committed and has since been tidied away, is the exact one a
+working tree scan cannot see. `scripts/check-secrets-history.sh` reads every
+blob reachable from every ref and applies the same rules, imported from
+`scripts/lib/secret_rules.py` so the two guards cannot disagree about what a
+secret is. It runs on every pull request, on a push to main, daily and on
+demand, rather than in the push gate, because it is the one check whose cost
+grows with the number of commits. The pull request run is the one that matters
+most: a branch can hold a secret in one commit and remove it in the next, and
+the squash that lands keeps neither, so that intermediate commit is read nowhere
+else.
+
+Its remedy is **rotation**, not rewriting history. Anything that was public has
+been fetchable for as long as it was there.
+
 **One value is one finding.** It walks the build output too, because a secret
 can reach a build product by routes the source never shows, so a single source
 line arrives as dozens of copies of itself. Occurrences of the same value in

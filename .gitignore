@@ -6,3 +6,9 @@
 .swiftpm/
 *.xcuserdatad
 xcuserdata/
+
+# Python's own compiled cache, written beside scripts/lib/secret_rules.py the
+# first time a guard imports it. A build product of running a check, never
+# anything written here (backstage#11).
+__pycache__/
+*.pyc
