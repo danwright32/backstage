@@ -65,6 +65,13 @@ else.
 Its remedy is **rotation**, not rewriting history. Anything that was public has
 been fetchable for as long as it was there.
 
+**An address among bytes that are not text is not an address.** The mailbox rule
+is the only one loose enough for random bytes to satisfy, since every credential
+rule needs a documented prefix and a run of twenty or more characters. So it
+stands down on content that holds a NUL byte or does not decode as UTF-8, which
+is git's own test for a binary file. The credential rules still read every byte
+of everything.
+
 **One value is one finding.** It walks the build output too, because a secret
 can reach a build product by routes the source never shows, so a single source
 line arrives as dozens of copies of itself. Occurrences of the same value in

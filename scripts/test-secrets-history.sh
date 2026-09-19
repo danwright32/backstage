@@ -23,7 +23,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "secrets history tests" 20
+harness_begin "secrets history tests" 22
 
 TARGET="scripts/check-secrets-history.sh"
 WORKING_TREE_GUARD="scripts/check-secrets.sh"
@@ -124,6 +124,25 @@ printf 'to: nobody@example.org\nalso: a@fixture.invalid\n' > "$D/Fixture.swift"
 commit_paths "$D" "documentation addresses" Fixture.swift
 run_history "$D"
 check "a reserved documentation domain in history is not a finding" "$CODE" "0"
+
+# AND THE SAME DECISION ABOUT WHAT IS TEXT (backstage#36). A committed binary
+# carries the same noise a build product does, and this guard reads blobs rather
+# than files, so the narrowing has to reach it through the shared library rather
+# than being written twice (L370). Both halves are asserted on ONE fixture: the
+# address among the bytes is not a finding, and the credential among them still
+# is, which is what keeps the narrowing scoped to the one loose rule.
+D="$(new_repo binary-blob)"
+printf 'noise\000more %s noise\000\001\002\n' "someone""@""ab.cd" > "$D/Compiled.bin"
+printf 'import Foundation\n' > "$D/Ordinary.swift"
+commit_paths "$D" "a committed binary" Compiled.bin Ordinary.swift
+run_history "$D"
+check "an address among committed bytes that are not text is not a finding" "$CODE" "0"
+
+printf 'noise\000\001 k = "%s" \000\002\n' "$CLIENT_SECRET" > "$D/Compiled.bin"
+commit_paths "$D" "and a credential among them" Compiled.bin
+run_history "$D"
+check "a credential among those same bytes still is" \
+    "$( [ "$CODE" -eq 1 ] && echo refused || echo "exit $CODE" )" "refused"
 
 # ---------------------------------------------------------------------------
 # NOTHING TO EXAMINE IS NOT A PASS (L98). A repository with no commits has no

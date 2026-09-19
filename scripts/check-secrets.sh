@@ -67,7 +67,7 @@ import sys
 # as a finding rather than as a check that could not run (L11, L98).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 try:
-    from secret_rules import CREDENTIAL_FILENAMES, findings_in
+    from secret_rules import CREDENTIAL_FILENAMES, findings_in_bytes
 except ImportError as error:
     print("REFUSED: scripts/lib/secret_rules.py could not be imported (%s)." % error)
     print("    The rules this guard applies live there, so nothing was checked.")
@@ -168,16 +168,15 @@ def main():
                 findings.append(("credential-store", relative, 0, None))
             try:
                 with open(path, "rb") as handle:
-                    # Decoded with replacement rather than skipped on a bad byte:
-                    # a scanner that gives up on a file holding one binary byte
-                    # stops examining it and says so in a way that reads as clean
-                    # (L329).
-                    text = handle.read().decode("utf-8", errors="replace")
+                    # THE BYTES, not a decode of them. Whether the content is
+                    # text is part of what decides a finding (backstage#36), and
+                    # that decision lives in the library beside the rules.
+                    raw = handle.read()
             except OSError as error:
                 print("REFUSED: %s could not be read (%s), so the tree was not fully checked."
                       % (relative, error.__class__.__name__))
                 return 2
-            for rule, number, value in findings_in(text):
+            for rule, number, value in findings_in_bytes(raw):
                 findings.append((rule, relative, number, value))
 
     if examined == 0:
