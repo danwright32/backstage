@@ -23,3 +23,4 @@ test-secrets-guard.sh	suite	Covers check-secrets.sh.
 test-test-harness.sh	suite	Covers lib/test-harness.sh.
 test-scopes-required.sh	suite	Proves a consumer naming no Gmail scopes does not compile, by building one (backstage#3).
 test-script-roles.sh	suite	Holds lib/script-roles.tsv to the scripts on disk, in both directions (backstage#10).
+test-package-identity.sh	suite	Refuses a script that spells a generated manifest's package identity or path out instead of deriving it (backstage#30).
