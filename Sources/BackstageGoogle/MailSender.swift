@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/MailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: 4bdb2689a9a556340c28d6f35acfa15520313df1e543dc5c8eff8fb402792522
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).

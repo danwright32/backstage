@@ -82,6 +82,33 @@ reported in full: there, the build product is the only evidence there is.
 code, and refuses both a run that found no suites and a run in which a suite it
 discovered did not execute.
 
+## Ported files, and what happens when one is edited here
+
+Files taken from Ovation and Overture carry a `Ported-From` header naming the
+repository, the path and the commit they came from.
+`scripts/check-ported-artifacts.sh` asserts that commit is still on the origin's
+main. `scripts/check-ported-content.sh` asserts the copy itself has not changed,
+which is a different question and the one the headers were asking all along
+when they said "do not edit this copy".
+
+Four outcomes, because the real population has four:
+
+- **in step**, the origin's file with one block of comments inserted. Nothing to
+  record: the origin and the commit pin it.
+- **adapted**, deliberately changed when it was ported, with the header saying
+  how and a `Ported-Adapted` digest saying what it looked like then. Most of them
+  are in this state, because the origin is one app's code and this is a package
+  three apps share.
+- **diverged**, an adaptation carrying a fix that is still pending at the origin,
+  named by a `Ported-Divergence` issue that must still be OPEN. Closing that
+  issue turns the file red until it is re-ported, which is the point: an
+  authorisation that outlives its reason is not an authorisation.
+- **drifted**, anything else, which is refused. The refusal prints the exact line
+  to write if the change was meant.
+
+Editing a ported file, including its comments, changes its digest. That is the
+point: the re-record is a one-line diff somebody has to look at.
+
 ## main is protected, so changes go through a pull request
 
 CI runs the guard against the real tree and then the suite, on **ubuntu-latest

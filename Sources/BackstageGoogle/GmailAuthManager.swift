@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: c82d74d453b91d488f5d52aab8e604cf4c5101e816e7056acf78b5dca6da5c7a
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).

@@ -1,5 +1,6 @@
 #!/bin/bash
 # Ported-From: danwright32/ovation scripts/test-check-ported-artifacts.sh @ 65e986c23c50d6a598e1dbb9aff5fbb923eb6908
+# Ported-Adapted: 83581f33ff71b0b882e55a6fe5cee544bda4408608411d440fb4a6a377a7f49f
 #
 # Ported on 2026-09-17 by backstage#2. Do not edit this copy to fix a fault
 # that is also in the origin: fix it there and re-port, or the two silently

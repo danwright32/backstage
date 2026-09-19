@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: 09423cf8fcf1aa57959b4d66750bda02b0648df52aa5519c4b78a60edd16d975
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).

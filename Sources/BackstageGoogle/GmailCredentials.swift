@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailCredentials.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: 8d1be4c690663324188ef97e94188eaf92445ea67d63f9242b978749f113878f
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
