@@ -62,4 +62,28 @@ struct LoopbackRetryTests {
         #expect(rec.attempts == LoopbackListener.bindAttempts)
         #expect(rec.sleeps.count == LoopbackListener.bindAttempts - 1)
     }
+
+    // The READINESS timeout runs on the injected sleep too, not only the retry pause, so no wait in
+    // the listener is on a clock a test cannot control (backstage#13). Asserted from what the
+    // listener ASKED the clock for, on a real bind. The fake parks until cancelled, the way the real
+    // sleep does, because the listener cancels that wait the moment it is ready and a fake that
+    // returned at once would tear a healthy listener down.
+    @Test func theReadinessTimeoutIsAskedOfTheInjectedClock() async throws {
+        let rec = Recorder()
+        let (listener, port) = try await LoopbackListener.start(
+            queue: DispatchQueue(label: "backstage.retry.readiness"), timeout: 45,
+            sleep: { seconds in
+                rec.sleeps.append(seconds)
+                try await Task.sleep(nanoseconds: 3_600_000_000_000)
+            },
+            onConnection: { $0.cancel() })
+        defer { listener.cancel() }
+        #expect(port != 0)
+        // The timeout task starts alongside the bind, so wait on the CONDITION, bounded, rather than
+        // on a fixed delay (L290).
+        for _ in 0..<500 where rec.sleeps.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(rec.sleeps.count == 1)
+        #expect((rec.sleeps.first ?? 0) > 0 && (rec.sleeps.first ?? 0) <= 45,
+                "the readiness wait is the remaining budget, asked of the injected clock")
+    }
 }
