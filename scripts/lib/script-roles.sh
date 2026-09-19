@@ -1,5 +1,6 @@
 #!/bin/bash
 # Ported-From: danwright32/ovation scripts/lib/script-roles.sh @ 98b9cf9c8f6bf47d1db0e689de347e32d2d573ef
+# Ported-Adapted: 163dc6bd33327ce57c3ea312cc8dc89aaa653de32331048ea3215539bdb43457
 #
 # Ported on 2026-09-17 by backstage#7, because check-ci-workflow.sh sources it
 # and exited 0 without it, reporting success while two of its parts could not

@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Domain/ReplyDetection.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: c8eb99f7e69e0cc224115c913443335b2e3c5921305da5f9d998188875da8f41
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). ONE PREDICATE, NOT THE FILE: `labelIds(of:)`,
 // `isDraft` and `wasSentByUser` from the origin's reply detection, as a shared definition, so Ovation

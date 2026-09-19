@@ -1,5 +1,6 @@
 #!/bin/bash
 # Ported-From: danwright32/ovation scripts/test-ci-workflow.sh @ 36c4ae029cbad8f5bbd327b37f0371a3d0c72a91
+# Ported-Adapted: 754cc668384aeae470091bb66ce33cbd3339f777b2f2528ea51b65fbfc0fdcae
 #
 # Ported on 2026-09-17 by backstage#7. Three of its four rules are general and
 # arrive unchanged: a timeout on every job, every action pinned to a sha, and one

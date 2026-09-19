@@ -27,3 +27,5 @@ test-package-identity.sh	suite	Refuses a script that spells a generated manifest
 check-secrets-history.sh	workflow	Named by .github/workflows/secrets-history.yml. It reads every blob ever committed, which is the one question the working tree guard cannot answer (backstage#11).
 test-secrets-history.sh	suite	Covers check-secrets-history.sh.
 lib/secret_rules.py	library	What counts as a credential or a real mailbox. Imported by check-secrets.sh and check-secrets-history.sh, so the two cannot disagree. Never run.
+check-ported-content.sh	gated	A repo wide guard. test-ported-content.sh runs it against the real tree and the real siblings as one of its own cases, so a port edited here turns the suite red on push (backstage#9).
+test-ported-content.sh	suite	Covers check-ported-content.sh.

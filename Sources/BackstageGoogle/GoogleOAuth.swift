@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GoogleOAuth.swift @ 750464734bffc8bd0af69898b13ec3e42d233c02
+// Ported-Adapted: 34139886fa3eab495a064c77fa3616afa4d2f7812417b4b1050d3e27c490daee
 //
 // Ported on 2026-09-18 by backstage#2. Do not edit this copy to fix a fault
 // that is also in the origin: fix it there and re-port (L263).

@@ -1,4 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/LoopbackListener.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
+// Ported-Adapted: 12311fdc432905194fc854750e15a2a9240fe823da76339b305bb84fa64da3ad
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).

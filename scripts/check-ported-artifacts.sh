@@ -1,5 +1,7 @@
 #!/bin/bash
 # Ported-From: danwright32/ovation scripts/check-ported-artifacts.sh @ 04e3dc90848ae267f4e55e2b58407f2de41dc43a
+# Ported-Adapted: a3b5067cde5b5216218fae91d4e29de0450f03057bde92764ceeee515d21680a
+# Ported-Divergence: danwright32/ovation#417
 #
 # Ported on 2026-09-17 by backstage#2. Do not edit this copy to fix a fault
 # that is also in the origin: fix it there and re-port, or the two silently
@@ -73,11 +75,8 @@ SCAN_ROOT="${BACKSTAGE_PORT_SCAN_ROOT:-$REPO_ROOT}"
 # and it cost nothing while it stood, which is exactly why an entry in a list like
 # that survives unnoticed; none of them said anything about where Ovation itself
 # is (L153).
-if [ -n "${BACKSTAGE_SIBLING_SEARCH_ROOTS:-}" ]; then
-    SEARCH_ROOTS="$BACKSTAGE_SIBLING_SEARCH_ROOTS"
-elif ! SEARCH_ROOTS="$(sibling_root "$REPO_ROOT")"; then
-    echo "CANNOT MEASURE: where the sibling checkouts live could not be worked out (see above)."
-    echo "    Set BACKSTAGE_SIBLING_SEARCH_ROOTS to the folder holding them."
+if ! SEARCH_ROOTS="$(sibling_search_roots "$REPO_ROOT")"; then
+    printf '%s\n' "$SEARCH_ROOTS"
     exit 2
 fi
 
@@ -99,25 +98,6 @@ fi
 # absolute, every sibling answered with Ovation's own origin, and a push was
 # refused for nine unmeasurable ports on 2026-09-08 with all nine present (L70,
 # L621).
-
-# Resolve <owner>/<repo> to a local checkout by asking each candidate what its
-# origin actually is, rather than matching on directory name. Overture's checkout
-# is not called "overture", so a name match would miss it, and a directory that
-# merely shares a name is not the same repository (L15).
-resolve_sibling() {
-    local slug="$1" root candidate url
-    local IFS=:
-    for root in $SEARCH_ROOTS; do
-        [ -d "$root" ] || continue
-        while IFS= read -r candidate; do
-            url="$(clean_git -C "$candidate" remote get-url origin 2>/dev/null)" || continue
-            case "$url" in
-                *"$slug".git|*"$slug"|*"$slug"/) printf '%s\n' "$candidate"; return 0 ;;
-            esac
-        done < <(find "$root" -maxdepth 3 -type d -name .git -not -path '*/.claude/*' 2>/dev/null | sed 's|/\.git$||')
-    done
-    return 1
-}
 
 # The branch the port has to be on. Prefer the local main, fall back to the
 # remote tracking one, and refuse rather than guess if neither is there.
@@ -162,7 +142,7 @@ while IFS= read -r file; do
             unreadable=$((unreadable+1))
             continue
         fi
-        if ! sibling="$(resolve_sibling "$slug")"; then
+        if ! sibling="$(resolve_sibling "$slug" "$SEARCH_ROOTS")"; then
             echo "CANNOT MEASURE: $rel"
             echo "    the sibling repository $slug is not on this machine"
             echo "    roots searched: $SEARCH_ROOTS"
