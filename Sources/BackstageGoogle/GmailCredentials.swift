@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailCredentials.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: f708dfe3d4afa9f217d86e903027bb8c695f8a7faf5cd93c5ef1fa5249a57e1f
+// Ported-Adapted: 2eb62f543a41998cdcd04baf9eaf3972671f0e73c358fc0798160d2f9d0bf4de
 // Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
@@ -22,6 +22,35 @@ import Foundation
 // single-user Mac a 0600 file is read-only to Dan's account; hardening to the
 // Keychain for a stably-signed build is a tracked follow-up.
 
+// What a stored grant actually is, so a consumer can say "connected as X,
+// confirmed N days ago" rather than presenting a possibly dead local copy as a
+// live authorization (L454).
+public struct GmailGrant: Equatable, Sendable {
+    public let account: String?
+    public let grantedScopes: [String]
+    public let obtainedAt: Date?
+    public let lastConfirmedAt: Date?
+}
+
+// Named GrantState rather than Connection because GmailConnection already exists
+// in this package as the live Gmail client: a shared name is read as evidence of
+// shared behaviour, and these two are about entirely different things (L263).
+//
+// Three outcomes rather than a Bool, because a grant that exists but does not
+// cover what this consumer asks for is a different fact from no grant at all,
+// and they need different remedies: one re-consents for more, the other consents
+// for the first time (L11).
+public enum GmailGrantState: Equatable, Sendable {
+    case notConnected
+    case connected(GmailGrant)
+    case grantMismatch(missingScopes: [String], storedAccount: String?)
+
+    public var isConnected: Bool {
+        if case .connected = self { return true }
+        return false
+    }
+}
+
 public struct GmailClient: Codable, Equatable, Sendable {
     public var clientId: String
     public var clientSecret: String
@@ -37,8 +66,46 @@ public struct StoredTokens: Codable, Equatable, Sendable {
     public var accessToken: String?
     public var accessTokenExpiry: Date?
 
-    public init(refreshToken: String, accessToken: String? = nil, accessTokenExpiry: Date? = nil) {
+    // WHAT THIS TOKEN IS ACTUALLY A GRANT FOR (backstage#45).
+    //
+    // Without these, a token file is adopted by whichever consumer reads it, and
+    // the one fact that differs between three apps sharing this package is the
+    // scopes they asked for. A token granted for less than a consumer needs then
+    // reads as connected and fails at the one call that needs the missing scope,
+    // far from the cause.
+    //
+    // OPTIONAL SO AN OLDER FILE STILL DECODES rather than the reader throwing and
+    // a consumer seeing an unreadable store where there is a readable one holding
+    // an old shape. A token that records nothing is NOT connected, which is the
+    // fail closed direction (L42): it cannot be shown to cover anything.
+    public var grantedScopes: [String]?
+
+    // WHO GRANTED IT, and it is nil far more often than it looks. Google returns
+    // an identity only when an identity scope was requested, so a consumer asking
+    // for gmail.send alone gets no account back. That is a fact worth surfacing
+    // rather than a gap to paper over, and it is why the account is RECORDED and
+    // shown but never matched on: matching on a value the grant cannot carry
+    // would refuse every correct connection.
+    public var account: String?
+
+    // WHEN IT WAS OBTAINED, and when it was last exchanged successfully.
+    //
+    // A local copy of an authorization that lives at Google reads identically
+    // whether it is live or dead, and the first action taken on a stale one is
+    // what discovers the staleness (L454). With an OAuth client in Testing status
+    // the refresh token expires every seven days, so that discovery would
+    // otherwise be a real send failing.
+    public var obtainedAt: Date?
+    public var lastConfirmedAt: Date?
+
+    public init(refreshToken: String, accessToken: String? = nil, accessTokenExpiry: Date? = nil,
+                grantedScopes: [String]? = nil, account: String? = nil,
+                obtainedAt: Date? = nil, lastConfirmedAt: Date? = nil) {
         self.refreshToken = refreshToken
+        self.grantedScopes = grantedScopes
+        self.account = account
+        self.obtainedAt = obtainedAt
+        self.lastConfirmedAt = lastConfirmedAt
         self.accessToken = accessToken
         self.accessTokenExpiry = accessTokenExpiry
     }
@@ -153,11 +220,29 @@ public enum GmailCredentials {
         try? FileManager.default.removeItem(at: url)
     }
 
-    public static func isConnected(tokensAt url: URL) -> Bool {
-        isConnected(tokensAt: url, recorder: .shared)
+    // WHAT THIS CONSUMER IS ACTUALLY CONNECTED FOR (backstage#45).
+    //
+    // `wanting` is the consumer's own scope list, so connected means THESE scopes
+    // rather than "a token file exists". Coverage, not equality: a stored grant
+    // wider than what is wanted still covers it, and re-consenting over that would
+    // ask the person for permission they have already given.
+    public static func connection(at url: URL, wanting scopes: [String]) -> GmailGrantState {
+        connection(at: url, wanting: scopes, recorder: .shared)
     }
 
-    static func isConnected(tokensAt url: URL, recorder: HandoffReadFailures) -> Bool {
-        loadTokens(from: url, recorder: recorder)?.refreshToken.isEmpty == false
+    static func connection(at url: URL, wanting scopes: [String],
+                           recorder: HandoffReadFailures) -> GmailGrantState {
+        guard let stored = loadTokens(from: url, recorder: recorder),
+              !stored.refreshToken.isEmpty else { return .notConnected }
+        // A token recording no grant cannot be shown to cover anything, so it is
+        // not this consumer's authorization (L42).
+        guard let granted = stored.grantedScopes, !granted.isEmpty else { return .notConnected }
+        let missing = scopes.filter { !granted.contains($0) }
+        guard missing.isEmpty else {
+            return .grantMismatch(missingScopes: missing, storedAccount: stored.account)
+        }
+        return .connected(GmailGrant(account: stored.account, grantedScopes: granted,
+                                     obtainedAt: stored.obtainedAt,
+                                     lastConfirmedAt: stored.lastConfirmedAt))
     }
 }

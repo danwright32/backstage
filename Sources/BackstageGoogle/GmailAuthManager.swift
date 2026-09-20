@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 4395099b087146e1dee97ad3133f78774be03030168020d6d4098feb9c7b0e74
+// Ported-Adapted: 77a25589e29619b06f563bcfb880d52afab585851a49115557a431941b83ee2c
 // Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
@@ -136,7 +136,14 @@ public final class GmailAuthManager {
 
     func endConnectAttempt() { isConnecting = false }
 
-    public var isConnected: Bool { GmailCredentials.isConnected(tokensAt: tokenURL) }
+    // WHAT THIS MANAGER IS CONNECTED FOR, judged against its OWN scopes
+    // (backstage#45). A token granted for less than this consumer asks for is not
+    // this consumer's authorization, however present its file is.
+    public var connection: GmailGrantState {
+        GmailCredentials.connection(at: tokenURL, wanting: scopes)
+    }
+
+    public var isConnected: Bool { connection.isConnected }
 
     // Begin the consent flow: open the browser, await the loopback redirect, exchange the code, and store
     // tokens. Throws on any failure; sends nothing.
@@ -227,8 +234,15 @@ public final class GmailAuthManager {
         guard let refresh = tokens.refreshToken else {
             throw AuthError.exchangeFailed("Google did not return a refresh token. Revoke prior access and retry.")
         }
+        // THE GRANT IS RECORDED WITH THE TOKEN, never inferred later: what was
+        // asked for is known here and nowhere else (backstage#45). The account is
+        // whatever Google returned, which is nil unless an identity scope was
+        // requested, and that absence is recorded as honestly as a value would be.
+        let obtained = now()
         let stored = StoredTokens(refreshToken: refresh, accessToken: tokens.accessToken,
-                                  accessTokenExpiry: tokens.expiresIn.map { now().addingTimeInterval(TimeInterval($0)) })
+                                  accessTokenExpiry: tokens.expiresIn.map { obtained.addingTimeInterval(TimeInterval($0)) },
+                                  grantedScopes: scopes, account: tokens.account,
+                                  obtainedAt: obtained, lastConfirmedAt: obtained)
         guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
     }
 
@@ -248,6 +262,9 @@ public final class GmailAuthManager {
         case .success(let tokens):
             stored.accessToken = tokens.accessToken
             stored.accessTokenExpiry = tokens.expiresIn.map { now.addingTimeInterval(TimeInterval($0)) }
+            // A SUCCESSFUL EXCHANGE IS THE ONLY EVIDENCE THE GRANT IS STILL LIVE,
+            // so it is the only thing that moves this stamp (L454).
+            stored.lastConfirmedAt = now
             guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
             refreshHealth = .healthy
             return tokens.accessToken

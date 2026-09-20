@@ -24,11 +24,16 @@ struct GmailCredentialsTests {
 
     @Test func tokensRoundTrip() throws {
         let url = GmailCredentials.tokenURL(in: try scratch())
+        // The grant travels with the token now (backstage#45), so the round trip
+        // has to carry it or the reading below is not the one consumers get.
         let tokens = StoredTokens(refreshToken: "rt", accessToken: "at",
-                                  accessTokenExpiry: Date(timeIntervalSince1970: 2_000_000_000))
+                                  accessTokenExpiry: Date(timeIntervalSince1970: 2_000_000_000),
+                                  grantedScopes: ["https://www.googleapis.com/auth/gmail.send"])
         #expect(try GmailCredentials.saveTokens(tokens, to: url))
         #expect(GmailCredentials.loadTokens(from: url, recorder: HandoffReadFailures()) == tokens)
-        #expect(GmailCredentials.isConnected(tokensAt: url, recorder: HandoffReadFailures()))
+        #expect(GmailCredentials.connection(at: url,
+                                            wanting: ["https://www.googleapis.com/auth/gmail.send"],
+                                            recorder: HandoffReadFailures()).isConnected)
     }
 
     // Written owner only, and never visible at wider permissions even for an instant (the origin's
@@ -48,7 +53,7 @@ struct GmailCredentialsTests {
         let url = GmailCredentials.tokenURL(in: try scratch())
         let recorder = HandoffReadFailures()
         #expect(GmailCredentials.loadTokens(from: url, recorder: recorder) == nil)
-        #expect(!GmailCredentials.isConnected(tokensAt: url, recorder: recorder))
+        #expect(GmailCredentials.connection(at: url, wanting: ["any"], recorder: recorder) == .notConnected)
         #expect(recorder.current().isEmpty, "an absent file is the ordinary state and is not a failure")
     }
 
@@ -65,7 +70,8 @@ struct GmailCredentialsTests {
     @Test func anEmptyRefreshTokenIsNotAConnection() throws {
         let url = GmailCredentials.tokenURL(in: try scratch())
         #expect(try GmailCredentials.saveTokens(StoredTokens(refreshToken: ""), to: url))
-        #expect(!GmailCredentials.isConnected(tokensAt: url, recorder: HandoffReadFailures()))
+        #expect(GmailCredentials.connection(at: url, wanting: ["any"],
+                                            recorder: HandoffReadFailures()) == .notConnected)
     }
 
     @Test func clearingRemovesTheTokens() throws {
