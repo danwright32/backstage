@@ -30,6 +30,15 @@ GREEN_WORKFLOWS=$'Shell suites on ${{ matrix.os }}\nSecrets in the history'
 HEAD_LINE=$'0e71051627c6a43a6e7e7e08b3a997895cc969b5\trefs/heads/main'
 
 world() {
+    # THE NAME IS REQUIRED, and that guard is here rather than at each call site.
+    # `rm -rf "$WORK/$1"` with an empty name is `rm -rf "$WORK/"`, which empties
+    # the harness temp directory every other case is standing in. Every call below
+    # passes a literal, so this can only fire on a future one, which is exactly
+    # when nobody is looking (L5).
+    if [ -z "${1:-}" ]; then
+        printf 'world() was called with no name, which would empty the temp dir.\n' >&2
+        exit 2
+    fi
     local dir="$WORK/$1"; shift
     rm -rf "$dir"; mkdir -p "$dir"
     plant "$dir" ls-remote "$HEAD_LINE"
