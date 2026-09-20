@@ -77,6 +77,44 @@ struct GmailAuthManagerTests {
         #expect(saved?.accessTokenExpiry == t0.addingTimeInterval(3600))
     }
 
+    // A SUCCESSFUL EXCHANGE IS THE ONLY THING THAT MOVES lastConfirmedAt
+    // (backstage#45), because it is the only evidence the grant at Google is
+    // still live. A stamp moved by anything else would let a dead credential go
+    // on reading as freshly confirmed (L454).
+    @Test func asuccessfulRefreshRecordsThatTheGrantIsStillLive() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let url = GmailCredentials.tokenURL(in: dir)
+        let longAgo = t0.addingTimeInterval(-86_400 * 30)
+        _ = try GmailCredentials.saveTokens(
+            StoredTokens(refreshToken: "rt", accessToken: "old",
+                         accessTokenExpiry: t0.addingTimeInterval(-10),
+                         grantedScopes: ["https://www.googleapis.com/auth/gmail.send"],
+                         obtainedAt: longAgo, lastConfirmedAt: longAgo), to: url)
+        let m = try manager(dir, fetch: { [self] req in
+            self.response(200, #"{"access_token":"new","expires_in":3600}"#, req)
+        })
+        #expect(try await m.validAccessToken() == "new")
+        let saved = GmailCredentials.loadTokens(from: url)
+        #expect(saved?.lastConfirmedAt == t0)
+        #expect(saved?.obtainedAt == longAgo, "when it was first granted does not move")
+    }
+
+    // AND A FAILED ONE DOES NOT MOVE IT. A refusal that still refreshed the stamp
+    // would report a credential as confirmed by the very exchange that failed.
+    @Test func afailedRefreshLeavesTheConfirmationStampWhereItWas() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let url = GmailCredentials.tokenURL(in: dir)
+        let longAgo = t0.addingTimeInterval(-86_400 * 30)
+        _ = try GmailCredentials.saveTokens(
+            StoredTokens(refreshToken: "rt", accessTokenExpiry: t0.addingTimeInterval(-10),
+                         grantedScopes: ["https://www.googleapis.com/auth/gmail.send"],
+                         obtainedAt: longAgo, lastConfirmedAt: longAgo), to: url)
+        let m = try manager(dir, fetch: { [self] req in self.response(503, "gateway", req) })
+        do { _ = try await m.validAccessToken(); Issue.record("expected a refusal") }
+        catch GmailAuthManager.AuthError.refreshFailed { } catch { Issue.record("wrong error \(error)") }
+        #expect(GmailCredentials.loadTokens(from: url)?.lastConfirmedAt == longAgo)
+    }
+
     // A dead login clears the saved tokens, so the consumer shows disconnected.
     @Test func aDeadLoginClearsTheTokens() async throws {
         let dir = try scratch(); try writeClient(dir)

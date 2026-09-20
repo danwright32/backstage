@@ -31,6 +31,32 @@ that back:
 which is the condition the package judges by and is published so a consumer
 wording a status line around it reads the same number.
 
+## Connected means these scopes, and says who and when
+
+`GmailAuthManager.connection` answers with a grant rather than a yes or no:
+
+    case notConnected
+    case connected(GmailGrant)                                    // account, scopes, obtained, last confirmed
+    case grantMismatch(missingScopes: [String], storedAccount: String?)
+
+The scopes a token was granted for are recorded with it, and connected is judged
+against **this consumer's own** scope list. That is the one fact that differs
+between three apps sharing this package, so without it a token written by one is
+adopted by another and fails at the first call needing a scope it never had.
+Coverage, not equality: a wider stored grant still covers a narrower want.
+
+A token recording no grant at all is **not** connected. It cannot be shown to
+cover anything, so the person re-consents.
+
+The account is nil unless an identity scope was requested, which for a consumer
+asking only to send is always. That absence is recorded as honestly as a value
+would be, rather than left looking like a gap.
+
+`lastConfirmedAt` moves only on a successful exchange, because that is the only
+evidence the grant is still live. With an OAuth client in Testing status the
+refresh token expires every seven days, and a dead local copy otherwise reads
+exactly like a live one.
+
 ## A test can never change a real Google login
 
 A credential write or delete inside a test run must target a **throwaway** path,

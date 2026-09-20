@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GoogleOAuth.swift @ 750464734bffc8bd0af69898b13ec3e42d233c02
-// Ported-Adapted: 34139886fa3eab495a064c77fa3616afa4d2f7812417b4b1050d3e27c490daee
+// Ported-Adapted: 17a3d9560022ebcc890c6d5a14e7de64bfb2b9272bb4a7261d3b0e2e956dbd13
 //
 // Ported on 2026-09-18 by backstage#2. Do not edit this copy to fix a fault
 // that is also in the origin: fix it there and re-port (L263).
@@ -179,9 +179,39 @@ public struct OAuthTokens: Codable, Equatable, Sendable {
     public var refreshToken: String?
     public var expiresIn: Int?
 
+    // WHO GRANTED THIS, when Google says so (backstage#45).
+    //
+    // Present only when an identity scope was requested, so a consumer asking for
+    // gmail.send alone gets nil here and that is correct rather than missing. It
+    // is recorded so that "connected as X" can be true when it is knowable, and
+    // honestly absent when it is not.
+    public var idToken: String?
+
+    // The email claim, read from the id token's payload.
+    //
+    // NOT VERIFIED, AND THAT IS SOUND HERE rather than an omission: this token
+    // came back on our own TLS connection to Google's token endpoint in response
+    // to our own request, which is the one case where a JWT needs no signature
+    // check. It is never accepted from anywhere else, and it is used to LABEL a
+    // grant, never to authorise anything.
+    public var account: String? {
+        guard let idToken else { return nil }
+        let segments = idToken.split(separator: ".")
+        guard segments.count == 3 else { return nil }
+        var payload = String(segments[1]).replacingOccurrences(of: "-", with: "+")
+                                         .replacingOccurrences(of: "_", with: "/")
+        // Base64url drops the padding that Data(base64Encoded:) requires.
+        while payload.count % 4 != 0 { payload.append("=") }
+        guard let data = Data(base64Encoded: payload),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return object["email"] as? String
+    }
+
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
+        case idToken = "id_token"
         case expiresIn = "expires_in"
     }
 }
