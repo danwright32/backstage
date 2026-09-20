@@ -2,9 +2,16 @@
 ''''exec python3 "$0" "$@" #'''
 __doc__ = """Refuse if a credential or a real mailbox appears anywhere in the tree.
 
-backstage#1. This repository is PUBLIC for the whole build, and its entire
-subject matter is a Google OAuth client. A committed secret in a public
-repository is compromised the moment it is pushed, not when somebody notices.
+backstage#1. This repository was PUBLIC for its whole build and went private on
+2026-09-19 (backstage#6), and its entire subject matter is a Google OAuth client.
+A committed secret in a public repository is compromised the moment it is pushed,
+not when somebody notices.
+
+THE VISIBILITY CHANGE RELAXES NOTHING HERE, and saying so is the point: every
+commit made while it was public was fetchable by anyone for as long as it stood,
+and by forks and caches afterwards. Going private does not un-publish any of it.
+A guard weakened on the reasoning that the repository is private now would be
+weakened on a premise that is false about everything already in it.
 
 THE DESIGN THIS DELIBERATELY DOES NOT COPY. Ovation's identity guard DERIVES its
 needles from the live client and venue populations that exist at its phase, and

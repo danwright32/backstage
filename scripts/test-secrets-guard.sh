@@ -3,9 +3,12 @@
 # which rule fired, must never print the value it found, and must refuse when it
 # examined nothing.
 #
-# backstage#1. This repository is PUBLIC for the whole build (Dan, 2026-09-17:
+# backstage#1. This repository was PUBLIC for its whole build (Dan, 2026-09-17:
 # Actions is unlimited on a public repo and a private one bills macOS runners at
-# ten times the rate), and its entire subject matter is a Google OAuth client.
+# ten times the rate) and went private on 2026-09-19, once nothing depended on it
+# being public. Its entire subject matter is a Google OAuth client, and every
+# commit made while it was public is still out there whatever the repository says
+# now, so none of these assertions softened when the visibility changed.
 #
 # THE DESIGN THIS DELIBERATELY DOES NOT COPY. Ovation's identity guard DERIVES
 # its needles from the live client and venue populations that exist at its phase,

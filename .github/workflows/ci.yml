@@ -31,9 +31,13 @@ jobs:
   # class at all, and this repository's scripts run on Dan's Mac every day.
   #
   # The cost is real and deliberate: macOS runners bill at ten times the Linux
-  # rate. On a public repository the minutes are unlimited, so what is actually
-  # being spent is a concurrency slot, and this suite holds one for about twelve
-  # seconds.
+  # rate, and since 2026-09-19 this repository is PRIVATE, so those minutes come
+  # out of the Free plan's 2,000 a month rather than being unlimited. Measured
+  # before the change: this job is about 94 seconds, which bills as 2 minutes at
+  # the 10x rate, so a whole CI run is about 22 billed minutes and roughly 90
+  # runs a month fit. That is the budget this matrix is spending, and it is worth
+  # it for the reason above: a shell suite validated only on Linux cannot see the
+  # bash 3.2 class at all.
   shell-suites:
     name: Shell suites on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
