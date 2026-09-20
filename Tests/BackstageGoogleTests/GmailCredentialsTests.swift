@@ -26,7 +26,7 @@ struct GmailCredentialsTests {
         let url = GmailCredentials.tokenURL(in: try scratch())
         let tokens = StoredTokens(refreshToken: "rt", accessToken: "at",
                                   accessTokenExpiry: Date(timeIntervalSince1970: 2_000_000_000))
-        #expect(GmailCredentials.saveTokens(tokens, to: url))
+        #expect(try GmailCredentials.saveTokens(tokens, to: url))
         #expect(GmailCredentials.loadTokens(from: url, recorder: HandoffReadFailures()) == tokens)
         #expect(GmailCredentials.isConnected(tokensAt: url, recorder: HandoffReadFailures()))
     }
@@ -36,7 +36,7 @@ struct GmailCredentialsTests {
     @Test func theTokenFileIsOwnerOnlyAndLeavesNoTempBehind() throws {
         let dir = try scratch()
         let url = GmailCredentials.tokenURL(in: dir)
-        #expect(GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url))
+        #expect(try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url))
 
         let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         #expect(mode == 0o600)
@@ -64,19 +64,19 @@ struct GmailCredentialsTests {
 
     @Test func anEmptyRefreshTokenIsNotAConnection() throws {
         let url = GmailCredentials.tokenURL(in: try scratch())
-        #expect(GmailCredentials.saveTokens(StoredTokens(refreshToken: ""), to: url))
+        #expect(try GmailCredentials.saveTokens(StoredTokens(refreshToken: ""), to: url))
         #expect(!GmailCredentials.isConnected(tokensAt: url, recorder: HandoffReadFailures()))
     }
 
     @Test func clearingRemovesTheTokens() throws {
         let url = GmailCredentials.tokenURL(in: try scratch())
-        #expect(GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url))
-        GmailCredentials.clearTokens(at: url)
+        #expect(try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url))
+        try GmailCredentials.clearTokens(at: url)
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
     // Freshness allows a skew, so a token about to expire is refreshed BEFORE Google refuses it.
-    @Test func freshnessHonoursTheSkew() {
+    @Test func freshnessHonoursTheSkew() throws {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let expiring = StoredTokens(refreshToken: "rt", accessToken: "at", accessTokenExpiry: now.addingTimeInterval(60))
         let fine = StoredTokens(refreshToken: "rt", accessToken: "at", accessTokenExpiry: now.addingTimeInterval(600))

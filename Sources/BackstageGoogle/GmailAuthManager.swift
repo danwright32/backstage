@@ -1,5 +1,6 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: c82d74d453b91d488f5d52aab8e604cf4c5101e816e7056acf78b5dca6da5c7a
+// Ported-Adapted: 4395099b087146e1dee97ad3133f78774be03030168020d6d4098feb9c7b0e74
+// Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -78,6 +79,11 @@ public final class GmailAuthManager {
     public let loginHint: String?
     private let clientURL: URL
     private let tokenURL: URL
+    // WHAT COUNTS AS A THROWAWAY CREDENTIALS PATH inside a test run (backstage#44),
+    // defaulting to the system temporary directory. Internal and settable so a suite
+    // can drive the REFUSING branch without pointing at a credentials directory
+    // somebody owns (L159). A consumer cannot reach it, so a consumer cannot widen it.
+    var throwawayRoot: URL = FileManager.default.temporaryDirectory
     private let log: (@Sendable (String) -> Void)?
     private let now: @Sendable () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -223,7 +229,7 @@ public final class GmailAuthManager {
         }
         let stored = StoredTokens(refreshToken: refresh, accessToken: tokens.accessToken,
                                   accessTokenExpiry: tokens.expiresIn.map { now().addingTimeInterval(TimeInterval($0)) })
-        guard GmailCredentials.saveTokens(stored, to: tokenURL) else { throw AuthError.tokenSaveFailed }
+        guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
     }
 
     // A valid access token, refreshing through the stored refresh token when stale.
@@ -242,14 +248,14 @@ public final class GmailAuthManager {
         case .success(let tokens):
             stored.accessToken = tokens.accessToken
             stored.accessTokenExpiry = tokens.expiresIn.map { now.addingTimeInterval(TimeInterval($0)) }
-            guard GmailCredentials.saveTokens(stored, to: tokenURL) else { throw AuthError.tokenSaveFailed }
+            guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
             refreshHealth = .healthy
             return tokens.accessToken
         case .failure(.authExpired):
             refreshHealth = .healthy
             // The refresh token is dead. Clear it so the consumer shows disconnected, instead of failing
             // opaquely.
-            GmailCredentials.clearTokens(at: tokenURL)
+            try GmailCredentials.clearTokens(at: tokenURL, throwaway: throwawayRoot)
             throw AuthError.authExpired
         case .failure(.transient):
             refreshHealth.consecutiveTemporaryFailures += 1
@@ -258,11 +264,11 @@ public final class GmailAuthManager {
         }
     }
 
-    public func disconnect() { GmailCredentials.clearTokens(at: tokenURL) }
+    public func disconnect() throws { try GmailCredentials.clearTokens(at: tokenURL, throwaway: throwawayRoot) }
 
     // Called when a live API call rejects the token mid-session: drop it so the consumer shows
     // disconnected (origin #50). GmailSender's onAuthExpired is where a consumer wires this.
-    public func signalAuthExpired() { GmailCredentials.clearTokens(at: tokenURL) }
+    public func signalAuthExpired() throws { try GmailCredentials.clearTokens(at: tokenURL, throwaway: throwawayRoot) }
 
     // MARK: - token exchange
 

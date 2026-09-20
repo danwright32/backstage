@@ -31,6 +31,23 @@ that back:
 which is the condition the package judges by and is published so a consumer
 wording a status line around it reads the same number.
 
+## A test can never change a real Google login
+
+A credential write or delete inside a test run must target a **throwaway** path,
+defaulting to the system temporary directory. `saveTokens` and `clearTokens`
+throw rather than proceeding, and `disconnect()` and `signalAuthExpired()` throw
+with them.
+
+This is separate from the refusal on live Gmail calls, and it has to be: that one
+covers the way in, and these are the way out. A test reaching `disconnect()` on a
+manager pointed at a real credentials directory would delete a real refresh
+token, and there is no undo. The refusal lives in the package rather than in each
+consumer's call site, because the write happens below that call site and no
+consumer can fix it from outside.
+
+Whether this is a test run is deliberately not a parameter, so a caller cannot
+pass one word and bypass a control that exists to protect them.
+
 **The package picks no surface for it.** Three apps share this, so a status
 line, a log entry or an alert chosen here would be chosen for all three. What it
 owes them is the fact and the threshold; what to do with it is each consumer's
