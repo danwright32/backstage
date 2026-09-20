@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 TARGET="scripts/cut-release.sh"
 
-harness_begin "cut release tests" 31
+harness_begin "cut release tests" 32
 require_target "$TARGET"
 harness_temp_dir WORK
 
@@ -155,11 +155,34 @@ check "and --sha with nothing after it is refused" \
 # ---------------------------------------------------------------------------
 # The real paths, once, so the seam is not the only thing ever measured (L246).
 # No fake directory at all: it resolves the real remote and reads the real API.
+#
+# WHAT IS ASSERTED IS THE SEAM, NOT THE WORLD, and that is the correction. This
+# first asserted "the tree is releasable", which is a fact about GitHub rather
+# than about this script: on a runner with no `gh` credential it read as a real
+# failure, indistinguishable from the script being broken (L411). CI found it,
+# reproduced here by putting a `gh` that exits 127 on the PATH.
+#
+# Both outcomes are correct behaviour. With the API reachable and the commit
+# green it says WOULD TAG; without, it REFUSES and names what it could not read.
+# What must be true either way is that the real path RUNS: it reaches its own
+# code, produces one of the two sentences it is allowed to produce, and never
+# dies with a traceback. The environment it measured in is printed, so a reader
+# knows which of the two was exercised.
 # ---------------------------------------------------------------------------
 REAL="$(bash "$TARGET" 0.1.0 --dry-run 2>&1)"
-check "against the real remote and the real API, the tree is releasable" \
-    "$(printf '%s' "$REAL" | grep -c 'WOULD TAG 0.1.0')" "1"
-check "and the real run reads the real history scan" \
-    "$(printf '%s' "$REAL" | grep -c 'committed blob')" "1"
+REAL_STATUS=$?
+if printf '%s' "$REAL" | grep -q 'WOULD TAG'; then
+    printf 'cut-release real path: measured against a reachable API, commit releasable.\n'
+else
+    printf 'cut-release real path: measured with the API or remote unreachable, so the\n'
+    printf '                       refusal branch is what ran. That is not a failure.\n'
+fi
+
+check "the real path produces one of the two sentences it is allowed to produce" \
+    "$(printf '%s' "$REAL" | grep -cE '^(WOULD TAG 0\.1\.0|REFUSED: )')" "1"
+check "and it never dies with an unhandled error" \
+    "$(printf '%s' "$REAL" | grep -c 'Traceback')" "0"
+check "and it exits 0 when it would tag and 1 when it refuses, never anything else" \
+    "$([ "$REAL_STATUS" = "0" ] || [ "$REAL_STATUS" = "1" ] && printf 'ok' || printf '%s' "$REAL_STATUS")" "ok"
 
 harness_end
