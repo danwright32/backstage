@@ -36,20 +36,37 @@ line, a log entry or an alert chosen here would be chosen for all three. What it
 owes them is the fact and the threshold; what to do with it is each consumer's
 decision.
 
-## This repository is public on purpose, and temporarily
+## This repository is private, and was public for its whole build
 
-Actions is unlimited on a public repository. A private one on the Free plan gets
-2,000 included minutes a month with macOS runners billing at ten times the rate.
-It goes private once the build no longer needs the minutes, tracked as issue #6.
+It went private on 2026-09-19 (issue #6), once nothing depended on it being
+public. Actions is unlimited on a public repository; a private one on the Free
+plan gets 2,000 included minutes a month with macOS runners billing at ten times
+the rate. Measured before the change: about 22 billed minutes per CI run, so
+roughly 90 runs a month, plus about 30 for the daily history scan.
 
-**So the privacy floor is load bearing rather than a formality.** Before any
+**Going private removed nothing that was already out, and the privacy floor is
+load bearing because of that rather than in spite of it.** Every commit made
+while it was public was fetchable by anyone for as long as it stood, and by
+forks and caches afterwards. Nothing about the current visibility changes that,
+which is exactly why the history scan below exists and why it stays.
+
+**Branch protection is gone, and that is a known gap rather than an oversight.**
+Protected branches on a private repository need GitHub Pro, so the two required
+checks stopped gating anything the moment the repository was flipped. Dan's
+decision, 2026-09-19: accept it. The pre push hook on his machine runs the same
+suites CI runs, before anything leaves the machine, and there is one committer.
+What is genuinely lost is that a red pull request can now be merged, because
+nothing refuses it. Making the repository public again restores the rule exactly
+as it was; so would GitHub Pro.
+
+**The privacy floor itself.** Before any
 push, `scripts/check-secrets.sh` refuses a Google client secret, a client id, an
 access or refresh token, a real mailbox address or a credential store file
 anywhere in the tree, names which rule fired, and never prints the value it
 matched.
 
-**And the history is read too, because deleting a secret from a public
-repository does not remove it.** It stays readable in the history, in forks, and
+**And the history is read too, because deleting a secret from a repository that
+was public does not remove it.** It stays readable in the history, in forks, and
 in anything that cloned or cached it, so the case that matters most, a
 credential that WAS committed and has since been tidied away, is the exact one a
 working tree scan cannot see. `scripts/check-secrets-history.sh` reads every
@@ -116,23 +133,26 @@ Four outcomes, because the real population has four:
 Editing a ported file, including its comments, changes its digest. That is the
 point: the re-record is a one-line diff somebody has to look at.
 
-## main is protected, so changes go through a pull request
+## main is no longer protected, and CI still runs
 
 CI runs the guard against the real tree and then the suite, on **ubuntu-latest
-and macos-latest both**, and main requires both to pass. The macOS job is not
+and macos-latest both**. Until 2026-09-19 main REQUIRED both to pass; going
+private on the Free plan removed that, as recorded above. They still run on
+every pull request and on every push to main, and they are still the thing to
+read before merging: what changed is that nothing now refuses a merge when they
+are red. The macOS job is not
 redundant: macOS ships bash 3.2 and Linux ships bash 5, and under `set -u` the
 two disagree about expanding an empty array, which is a fault that has already
 shipped here once. Each job prints the bash it ran, so an image quietly moving
 to bash 5 on macOS removes that coverage loudly rather than silently.
 
-The rule is **not** enforced for the repository owner, by Dan's decision of
+The rule had already been lifted for the repository owner, by Dan's decision of
 2026-09-17: a branch frozen by a CI outage is worse here than an occasional
-unchecked push, in a repository with one committer. Everyone else, and every
-pull request, still needs both checks. To make it strict, and to lift it again:
+unchecked push, in a repository with one committer. So what going private removed
+was the rule as it applied to pull requests, which is the part that was doing the
+work.
 
-    gh api -X POST repos/danwright32/backstage/branches/main/protection/enforce_admins
-    gh api -X DELETE repos/danwright32/backstage/branches/main/protection/enforce_admins
-
-**The two job names are load bearing.** They are what the branch rule names, and
-a branch rule cannot be found by searching this repository. Renaming a job
-without updating the rule leaves main requiring a check that no longer runs.
+**The two job names were load bearing and are worth keeping stable anyway.** They
+are what a branch rule names, and a branch rule cannot be found by searching this
+repository, so a rename now would be silently fine and silently wrong again the
+day protection comes back.

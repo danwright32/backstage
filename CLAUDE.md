@@ -27,5 +27,11 @@ package's public surface.
 - The package carries no default scope list. Every consumer names the OAuth scopes it wants at its
   own call site, and a consumer that names none gets none. Adding a default here would grant scopes
   to three apps at once, silently.
-- The repository is public while it is being built, for the Actions minutes, and goes private
-  afterwards. Nothing in it may carry a secret in the meantime.
+- The repository is PRIVATE, since 2026-09-19 and issue #6. It was public for its whole build,
+  for the Actions minutes, so everything in its history was public and is still out there
+  whatever the current visibility says. Nothing in it may carry a secret, and that rule did not
+  relax when the visibility changed: the two secrets guards, over the working tree and over every
+  blob ever committed, stay exactly as they were.
+- Branch protection on main is GONE, because protected branches on a private repository need
+  GitHub Pro. Dan accepted that on 2026-09-19. CI still runs and the pre push hook still gates
+  Dan's machine; nothing refuses a red pull request. Do not describe main as protected.
