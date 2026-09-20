@@ -53,7 +53,7 @@ struct GmailAuthManagerTests {
 
     @Test func aFreshTokenIsReturnedWithoutAsking() async throws {
         let dir = try scratch(); try writeClient(dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt", accessToken: "fresh",
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt", accessToken: "fresh",
                                                      accessTokenExpiry: t0.addingTimeInterval(3600)),
                                         to: GmailCredentials.tokenURL(in: dir))
         let asked = Box(0)
@@ -65,7 +65,7 @@ struct GmailAuthManagerTests {
     @Test func aStaleTokenIsRefreshedAndSavedWithItsNewExpiry() async throws {
         let dir = try scratch(); try writeClient(dir)
         let url = GmailCredentials.tokenURL(in: dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt", accessToken: "old",
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt", accessToken: "old",
                                                      accessTokenExpiry: t0.addingTimeInterval(-10)), to: url)
         let m = try manager(dir, fetch: { [self] req in
             self.response(200, #"{"access_token":"new","expires_in":3600}"#, req)
@@ -81,7 +81,7 @@ struct GmailAuthManagerTests {
     @Test func aDeadLoginClearsTheTokens() async throws {
         let dir = try scratch(); try writeClient(dir)
         let url = GmailCredentials.tokenURL(in: dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url)
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url)
         let m = try manager(dir, fetch: { [self] req in self.response(400, #"{"error":"invalid_grant"}"#, req) })
         await #expect(throws: GmailAuthManager.AuthError.authExpired) { _ = try await m.validAccessToken() }
         #expect(!FileManager.default.fileExists(atPath: url.path))
@@ -91,7 +91,7 @@ struct GmailAuthManagerTests {
     @Test func aTemporaryFailureKeepsTheTokens() async throws {
         let dir = try scratch(); try writeClient(dir)
         let url = GmailCredentials.tokenURL(in: dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url)
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: url)
         let m = try manager(dir, fetch: { [self] req in self.response(503, "gateway", req) })
         do { _ = try await m.validAccessToken(); Issue.record("expected a refusal") }
         catch GmailAuthManager.AuthError.refreshFailed { } catch { Issue.record("wrong error \(error)") }
@@ -136,7 +136,7 @@ struct GmailAuthManagerTests {
 
     @Test func refreshingThroughTheLiveNetworkRefusesInsideATestRun() async throws {
         let dir = try scratch(); try writeClient(dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
         let m = try manager(dir)
         await #expect(throws: GmailNetworking.RefusedUnderTests.self) { _ = try await m.validAccessToken() }
     }
@@ -260,7 +260,7 @@ struct GmailAuthManagerTests {
 
     private func failingRefresh(_ dir: URL, status: Int = 503, clock: Box<Date>) throws -> GmailAuthManager {
         try writeClient(dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
         let answer = Box(status)
         return try GmailAuthManager(credentialsDirectory: dir, scopes: scopes,
             now: { clock.value },
@@ -297,7 +297,7 @@ struct GmailAuthManagerTests {
     @Test func theRunIsResetBySuccessOnTheSameManager() async throws {
         let clock = Box(t0)
         let dir = try scratch(); try writeClient(dir)
-        _ = GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
+        _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
         let answer = Box(503)
         let m = try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, now: { clock.value },
             fetch: { [self] req in
@@ -320,7 +320,7 @@ struct GmailAuthManagerTests {
 
     // ---------- the package carries no consumer's voice ----------
 
-    @Test func noMessageNamesAnyApp() {
+    @Test func noMessageNamesAnyApp() throws {
         let all: [GmailAuthManager.AuthError] = [.noClientConfig, .notConnected, .listenerFailed,
             .listenerUnreachable, .stateMismatch, .exchangeFailed("x"), .refreshFailed("x"), .authExpired,
             .tokenSaveFailed, .alreadyConnecting, .noScopes]

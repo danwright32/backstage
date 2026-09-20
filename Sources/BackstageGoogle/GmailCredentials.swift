@@ -1,5 +1,6 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailCredentials.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 8d1be4c690663324188ef97e94188eaf92445ea67d63f9242b978749f113878f
+// Ported-Adapted: f708dfe3d4afa9f217d86e903027bb8c695f8a7faf5cd93c5ef1fa5249a57e1f
+// Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -77,15 +78,78 @@ public enum GmailCredentials {
         return HandoffFile.read(at: url, recorder: recorder) { try JSONDecoder().decode(StoredTokens.self, from: $0) }.value
     }
 
+    // A CREDENTIAL WRITE OR DELETE INSIDE A TEST RUN MUST TARGET A THROWAWAY PATH
+    // (backstage#44).
+    //
+    // backstage#5 put a refusal at the one place a live Gmail call is made, which
+    // covers the way IN. These two are the way OUT, they name a path directly, and
+    // they are reachable from disconnect(), signalAuthExpired(), persistExchangedTokens
+    // and validAccessToken. A seam that keeps a test off live data on the way in does
+    // not cover the way out, and the way out is the half that cannot be undone (L201,
+    // L5). A consumer cannot fix this from outside, because the write happens below
+    // its call site, so the refusal belongs in the service (L2, L196).
+    //
+    // WHAT COUNTS AS THROWAWAY IS A PARAMETER, defaulting to the system temporary
+    // directory, which is where every test here already puts its credentials. It is a
+    // parameter because the refusing branch cannot otherwise be driven: proving it
+    // would mean a test pointing at a credentials directory somebody owns (L159).
+    public struct CredentialWriteRefused: LocalizedError, Equatable {
+        public let path: String
+        public var errorDescription: String? {
+            "A Gmail credential write was refused: this process is a test run and \(path) is not "
+            + "under the throwaway directory. A test that reaches here is about to change a real "
+            + "Google login, and that cannot be undone. Point it at a temporary directory."
+        }
+    }
+
+    // The decision alone, so both outcomes can be asserted without writing anything,
+    // the same shape GmailNetworking.refusal(underTests:) already uses (L159).
+    static func writeRefusal(at url: URL, underTests: Bool,
+                             throwaway: URL) -> CredentialWriteRefused? {
+        guard underTests else { return nil }
+        guard !isUnder(url, throwaway) else { return nil }
+        return CredentialWriteRefused(path: url.path)
+    }
+
+    // CONTAINMENT BY PATH COMPONENT, NEVER BY STRING PREFIX: a sibling whose name
+    // merely begins with the throwaway directory's would pass a prefix test while
+    // being somewhere else entirely (L266). Symlinks are resolved first because the
+    // system temporary directory is reached through one on macOS, so the two sides
+    // would otherwise never agree.
+    private static func isUnder(_ url: URL, _ directory: URL) -> Bool {
+        let target = url.resolvingSymlinksInPath().standardized.pathComponents
+        let root = directory.resolvingSymlinksInPath().standardized.pathComponents
+        guard target.count > root.count else { return false }
+        return Array(target.prefix(root.count)) == root
+    }
+
     // Goes through SecureFileWrite (#524) so the file is never briefly world-default-readable the
     // way a plain atomic write followed by a separate best-effort chmod would leave it (#486).
+    //
+    // THROWS ON REFUSAL, RETURNS FALSE ON A FAILED WRITE, and those are different
+    // facts (L11): one is a test about to destroy a real login, the other is a disk
+    // that would not take the bytes.
     @discardableResult
-    public static func saveTokens(_ tokens: StoredTokens, to url: URL) -> Bool {
+    // WHETHER THIS IS A TEST RUN IS NOT A PARAMETER, deliberately. A public
+    // default argument cannot name an internal symbol anyway, and exposing it
+    // would hand a consumer a one word bypass of a refusal that exists to protect
+    // them (L42: a control that exists to protect somebody fails closed).
+    public static func saveTokens(_ tokens: StoredTokens, to url: URL,
+                                  throwaway: URL = FileManager.default.temporaryDirectory) throws -> Bool {
+        if let refusal = writeRefusal(at: url, underTests: GmailNetworking.isTestRun(),
+                                      throwaway: throwaway) {
+            throw refusal
+        }
         guard let data = try? JSONEncoder().encode(tokens) else { return false }
         return SecureFileWrite.writeOwnerOnly(data, to: url)
     }
 
-    public static func clearTokens(at url: URL) {
+    public static func clearTokens(at url: URL,
+                                   throwaway: URL = FileManager.default.temporaryDirectory) throws {
+        if let refusal = writeRefusal(at: url, underTests: GmailNetworking.isTestRun(),
+                                      throwaway: throwaway) {
+            throw refusal
+        }
         try? FileManager.default.removeItem(at: url)
     }
 
