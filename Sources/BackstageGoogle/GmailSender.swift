@@ -1,5 +1,19 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 09423cf8fcf1aa57959b4d66750bda02b0648df52aa5519c4b78a60edd16d975
+// Ported-Adapted: 4ff67b5178e523554c84a3fc1bc96e1c4b9c0ae3646f2575b5ebd7aee1889819
+//
+// ADAPTED AGAIN ON 2026-09-21 BY backstage#51, and the digest above was re-recorded
+// deliberately rather than to quiet the guard. The rule in the paragraph below is
+// "do not edit this copy to fix a FAULT that is also in the origin", and an
+// attachment is not a fault: Overture sends pitches, nudges and closing notes, and
+// none of them carries a file, so there is nothing at the origin to fix. Taking
+// this to Overture would mean adding a capability that app does not want in order
+// to re-port it here, which is the DIVERGED route paying a cost for nothing.
+//
+// WHAT DIVERGED, stated so the next reader does not have to diff two repositories:
+// this copy can attach files and Overture's cannot. Everything else is unchanged,
+// and the two message forms Overture actually produces (a single text/plain, and a
+// multipart/alternative when the signature carries HTML) are byte for byte what
+// they were, which `MailAttachmentTests` asserts through an outside parser.
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -32,6 +46,16 @@ public struct GmailSender: MailSender {
     public var token: @Sendable () async throws -> String
     public var fetch: @Sendable (URLRequest) async throws -> (Data, URLResponse)
     public var onAuthExpired: @Sendable () async -> Void
+
+    /// What Gmail's simple upload accepts on `users/me/messages/send`, measured in
+    /// the unit the limit is expressed in: the bytes of the base64url `raw` field.
+    ///
+    /// 5 MB, from Google's Gmail API "Sending limits" documentation, read
+    /// 2026-09-21. The headroom below it is deliberate: the request also carries
+    /// the JSON envelope and, on a threaded send, a `threadId`, and a refusal that
+    /// lands exactly on the cap refuses nothing the cap would have allowed while
+    /// letting through the case it exists to catch (L648).
+    public static let maximumRawRequestBytes = 5 * 1_048_576 - 64 * 1_024
 
     public init(fromName: String, fromEmail: String, signature: MessageSignature = .none,
                 token: @escaping @Sendable () async throws -> String,
@@ -75,7 +99,20 @@ public struct GmailSender: MailSender {
             fromName: fromName, fromEmail: fromEmail,
             to: mail.to, subject: mail.subject, body: mail.body,
             signature: signature,
-            inReplyTo: mail.inReplyTo, references: mail.references)
+            inReplyTo: mail.inReplyTo, references: mail.references,
+            attachments: mail.attachments)
+
+        // backstage#51. REFUSED ON THE ENCODED REQUEST, never on the attachment's
+        // own size, and that is the whole point of where this sits. Gmail's cap is
+        // on the raw request, and a file grows roughly 1.8x on the way there:
+        // base64 into its part, then the whole RFC822 message base64url encoded
+        // into `raw`. A refusal written against the PDF's byte count admits a 3 MB
+        // file that arrives as 5.4 MB and gets exactly the opaque 400 this exists
+        // to prevent, while reading as protection (L81, L63).
+        guard raw.utf8.count <= maximumRawRequestBytes else {
+            throw GmailSendError.tooLargeToSend(bytes: raw.utf8.count,
+                                                limit: maximumRawRequestBytes)
+        }
 
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
         req.httpMethod = "POST"
@@ -153,10 +190,17 @@ public struct GmailSender: MailSender {
 public enum GmailSendError: LocalizedError, Equatable {
     case api(String)
     case authExpired
+    /// backstage#51. The encoded request is over what Gmail's simple send accepts.
+    /// Carries both numbers so a caller can say by how much rather than only that
+    /// something was too big (L11).
+    case tooLargeToSend(bytes: Int, limit: Int)
     public var errorDescription: String? {
         switch self {
         case .api(let m): return m
         case .authExpired: return "Gmail access expired or was revoked, so it needs connecting again."
+        case .tooLargeToSend(let bytes, let limit):
+            return "This message comes to \(bytes / 1_048_576) MB encoded, and Gmail accepts "
+                + "\(limit / 1_048_576) MB, so nothing was sent. The attachment is what to make smaller."
         }
     }
 }

@@ -1,5 +1,19 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/MailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 4bdb2689a9a556340c28d6f35acfa15520313df1e543dc5c8eff8fb402792522
+// Ported-Adapted: d78476b532356535f00dfe0e667e7c45ea42f9365449b2c76bd39b272263c165
+//
+// ADAPTED AGAIN ON 2026-09-21 BY backstage#51, and the digest above was re-recorded
+// deliberately rather than to quiet the guard. The rule in the paragraph below is
+// "do not edit this copy to fix a FAULT that is also in the origin", and an
+// attachment is not a fault: Overture sends pitches, nudges and closing notes, and
+// none of them carries a file, so there is nothing at the origin to fix. Taking
+// this to Overture would mean adding a capability that app does not want in order
+// to re-port it here, which is the DIVERGED route paying a cost for nothing.
+//
+// WHAT DIVERGED, stated so the next reader does not have to diff two repositories:
+// this copy can attach files and Overture's cannot. Everything else is unchanged,
+// and the two message forms Overture actually produces (a single text/plain, and a
+// multipart/alternative when the signature carries HTML) are byte for byte what
+// they were, which `MailAttachmentTests` asserts through an outside parser.
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -13,6 +27,27 @@ import Foundation
 // The seam between a consumer and actually sending mail. A real implementation calls the Gmail API
 // for whichever account the consumer authorized. Until one is connected, NotConfiguredSender lets the
 // whole send pipeline build, test and run without sending anything.
+
+/// A file riding on an outgoing mail. backstage#51.
+///
+/// FAILABLE FOR THE SAME REASON `OutgoingMail` IS. An attachment with no filename
+/// arrives as something the client cannot save, and one with no bytes arrives as a
+/// file that is not there; both are worse than a refusal, because the send reports
+/// success and the person on the other end is the one who finds out (L67).
+public struct MailAttachment: Equatable, Sendable {
+    public let filename: String
+    public let mimeType: String
+    public let bytes: Data
+
+    public init?(filename: String, mimeType: String, bytes: Data) {
+        let filename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mimeType = mimeType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !filename.isEmpty, !mimeType.isEmpty, !bytes.isEmpty else { return nil }
+        self.filename = filename
+        self.mimeType = mimeType
+        self.bytes = bytes
+    }
+}
 
 public struct OutgoingMail: Equatable, Sendable {
     // #2030: a list, because one message can name several people (milestone "One email to several
@@ -36,6 +71,10 @@ public struct OutgoingMail: Equatable, Sendable {
     // threads by walking the chain no link back to the first. Nil on a first send, which has no ancestry.
     public var references: String? = nil
     public var threadId: String? = nil
+    // backstage#51: the files this mail carries, usually none and for Ovation one
+    // invoice PDF. Empty by default, so every existing caller builds exactly the
+    // message it built before.
+    public var attachments: [MailAttachment] = []
 
     // Nil when there is nobody to send to. A mail with no addressee is not a mail, and the alternative
     // (constructing one and finding out at the Gmail API, or worse not finding out) puts the discovery
@@ -51,7 +90,7 @@ public struct OutgoingMail: Equatable, Sendable {
     // what sends, and this only decides whether there is one at all.
     public init?(to: [String], subject: String, body: String,
           inReplyTo: String? = nil, references: String? = nil,
-          threadId: String? = nil) {
+          threadId: String? = nil, attachments: [MailAttachment] = []) {
         let addresses = to.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !addresses.isEmpty,
               !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -61,6 +100,7 @@ public struct OutgoingMail: Equatable, Sendable {
         self.inReplyTo = inReplyTo
         self.references = references
         self.threadId = threadId
+        self.attachments = attachments
     }
 }
 

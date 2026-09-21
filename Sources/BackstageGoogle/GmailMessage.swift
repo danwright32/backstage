@@ -1,5 +1,19 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailMessage.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: f276779ee5eaab458d03262ae41b146328a5582a3f2bf2552c8972444c0c34de
+// Ported-Adapted: 50b986034f80e8037a2992dc015f0e9b99988425ba0677e96cfd73743baa72b1
+//
+// ADAPTED AGAIN ON 2026-09-21 BY backstage#51, and the digest above was re-recorded
+// deliberately rather than to quiet the guard. The rule in the paragraph below is
+// "do not edit this copy to fix a FAULT that is also in the origin", and an
+// attachment is not a fault: Overture sends pitches, nudges and closing notes, and
+// none of them carries a file, so there is nothing at the origin to fix. Taking
+// this to Overture would mean adding a capability that app does not want in order
+// to re-port it here, which is the DIVERGED route paying a cost for nothing.
+//
+// WHAT DIVERGED, stated so the next reader does not have to diff two repositories:
+// this copy can attach files and Overture's cannot. Everything else is unchanged,
+// and the two message forms Overture actually produces (a single text/plain, and a
+// multipart/alternative when the signature carries HTML) are byte for byte what
+// they were, which `MailAttachmentTests` asserts through an outside parser.
 //
 // Ported on 2026-09-19 by backstage#2 (step 2). Do not edit this copy to fix a fault that is also
 // in the origin: fix it there and re-port (L263).
@@ -47,7 +61,9 @@ enum GmailMessage {
     static func rfc822(fromName: String, fromEmail: String, to: [String], subject: String, body: String,
                        signature: MessageSignature = .none, boundary: String? = nil,
                        inReplyTo: String? = nil,
-                       references: String? = nil) -> String {
+                       references: String? = nil,
+                       attachments: [MailAttachment] = [],
+                       attachmentBoundary: String? = nil) -> String {
         // backstage#4, PRD 5.10b. EVERY value that reaches a header passes through headerSafe first.
         // The origin interpolated them straight in, so a plain ASCII subject carrying a line break
         // became an ADDITIONAL header, a second recipient say. Harmless while nothing untrusted
@@ -85,10 +101,31 @@ enum GmailMessage {
             headers.append("References: \(refs)")
         }
         let plainBody = plainBody(body: body, signature: signature)
-        if let htmlPart = htmlPart(body: body, signature: signature) {
-            let b = boundary ?? freshBoundary()
-            headers += [
-                "MIME-Version: 1.0",
+        let htmlPart = htmlPart(body: body, signature: signature)
+
+        // backstage#51. THERE ARE FOUR MESSAGE FORMS, NOT TWO, and the fourth is
+        // the one a change written as "become mixed when there is an attachment"
+        // gets wrong. This was ALREADY multipart before attachments existed: an
+        // HTML signature makes it `multipart/alternative` (#1144). So the two axes
+        // are independent, and with both present the mixed part has to WRAP the
+        // alternative rather than replace it. Replacing it drops the HTML part and
+        // the loss is silent, because the mail still arrives, just plain.
+        //
+        //   no attachment, plain signature  ->  text/plain
+        //   no attachment, HTML signature   ->  multipart/alternative
+        //   attachment,    plain signature  ->  multipart/mixed [ text/plain, file ]
+        //   attachment,    HTML signature   ->  multipart/mixed [ alternative, file ]
+        //
+        // The first two are byte for byte what they were, which is what keeps every
+        // existing caller sending exactly the message it sent before.
+        //
+        // TWO BOUNDARIES, AND THEY MUST DIFFER. One value used for both means the
+        // inner part's closing delimiter terminates the outer part as well, and the
+        // attachment is simply not in the message a receiver parses. They are
+        // separate arguments rather than one, so a test can pin both, and each
+        // defaults to its own fresh UUID.
+        func alternative(_ b: String) -> [String] {
+            [
                 "Content-Type: multipart/alternative; boundary=\"\(b)\"",
                 "",
                 "--\(b)",
@@ -100,19 +137,67 @@ enum GmailMessage {
                 "Content-Type: text/html; charset=UTF-8",
                 "Content-Transfer-Encoding: 8bit",
                 "",
-                htmlPart,
+                htmlPart ?? "",
                 "--\(b)--",
             ]
+        }
+        let plain = [
+            "Content-Type: text/plain; charset=UTF-8",
+            "Content-Transfer-Encoding: 8bit",
+            "",
+            plainBody,
+        ]
+
+        if attachments.isEmpty {
+            headers.append("MIME-Version: 1.0")
+            headers += htmlPart != nil ? alternative(boundary ?? freshBoundary()) : plain
         } else {
+            let mixed = attachmentBoundary ?? freshBoundary()
             headers += [
                 "MIME-Version: 1.0",
-                "Content-Type: text/plain; charset=UTF-8",
-                "Content-Transfer-Encoding: 8bit",
+                "Content-Type: multipart/mixed; boundary=\"\(mixed)\"",
                 "",
-                plainBody,
+                "--\(mixed)",
             ]
+            headers += htmlPart != nil ? alternative(boundary ?? freshBoundary()) : plain
+            for attachment in attachments {
+                headers += ["--\(mixed)"] + attachmentPart(attachment)
+            }
+            headers.append("--\(mixed)--")
         }
         return headers.joined(separator: "\r\n")
+    }
+
+    // One attached file, base64 encoded.
+    //
+    // THE FILENAME PASSES THROUGH `headerSafe` LIKE EVERY OTHER HEADER VALUE,
+    // which is backstage#4's rule and applies here for a reason rather than by
+    // symmetry: Ovation builds this name from an invoice number and a client's
+    // shoot, so it is as untrusted as a subject, and it is written into TWO
+    // headers. It is also quoted, so the quote and the backslash are escaped:
+    // `headerSafe` covers line breaks and a quoted string can be ended by a
+    // character it says nothing about (L273).
+    //
+    // WRAPPED AT 76 CHARACTERS, which RFC 2045 requires. Gmail accepts an
+    // unwrapped line, which is exactly why this is not left to chance: the fault
+    // would appear at some receiving server and never in our own mailbox.
+    private static func attachmentPart(_ attachment: MailAttachment) -> [String] {
+        let name = quoted(headerSafe(attachment.filename))
+        let type = headerSafe(attachment.mimeType)
+        return [
+            "Content-Type: \(type); name=\"\(name)\"",
+            "Content-Transfer-Encoding: base64",
+            "Content-Disposition: attachment; filename=\"\(name)\"",
+            "",
+            attachment.bytes.base64EncodedString(
+                options: [.lineLength76Characters, .endLineWithCarriageReturn,
+                          .endLineWithLineFeed]),
+        ]
+    }
+
+    private static func quoted(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     // The text/html part: the drafted body, HTML-escaped and newline-to-<br> so it can't inject markup and
@@ -135,11 +220,13 @@ enum GmailMessage {
     static func rawField(fromName: String, fromEmail: String, to: [String], subject: String, body: String,
                          signature: MessageSignature = .none,
                          inReplyTo: String? = nil,
-                         references: String? = nil) -> String {
+                         references: String? = nil,
+                         attachments: [MailAttachment] = []) -> String {
         base64url(Data(rfc822(fromName: fromName, fromEmail: fromEmail, to: to, subject: subject, body: body,
                               signature: signature,
                               inReplyTo: inReplyTo,
-                              references: references).utf8))
+                              references: references,
+                              attachments: attachments).utf8))
     }
 
     // #2672: `newMessageID` is GONE. It minted an id for the send path to stamp, and #2647 stopped that
