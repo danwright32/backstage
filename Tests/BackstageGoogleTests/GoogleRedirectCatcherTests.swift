@@ -300,6 +300,11 @@ struct GoogleRedirectCatcherTests {
     // inverted. That is the shipped behaviour and the reason the check is documented as failing in
     // about two seconds rather than at once; it is written down here so nobody reads this as
     // covering that branch (L400).
+    //
+    // It names its OWN deadline rather than living through the shipped two seconds, which the check
+    // would otherwise spend on every run of this test (L290, L524). A quarter second is not a guess
+    // about the machine: a loopback connect that is going to succeed resolves in microseconds, so
+    // this is three orders of magnitude of headroom and the answer still comes from the socket.
     @Test func aStoppedCatchSaysItsPortIsNotAccepting() async throws {
         let subject = catcher()
         _ = try await subject.start()
@@ -307,8 +312,8 @@ struct GoogleRedirectCatcherTests {
 
         var stillAccepting = true
         for _ in 0..<200 where stillAccepting {
-            stillAccepting = await subject.reachable()
-            if stillAccepting { try await Task.sleep(nanoseconds: 10_000_000) }
+            stillAccepting = await subject.reachable(timeout: 0.25)
+            if stillAccepting { try await Task.sleep(nanoseconds: 5_000_000) }
         }
         #expect(!stillAccepting)
     }
