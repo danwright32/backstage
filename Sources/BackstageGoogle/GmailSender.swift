@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 09423cf8fcf1aa57959b4d66750bda02b0648df52aa5519c4b78a60edd16d975
+// Ported-Adapted: 35da9a283912e325e920d3de320efd0d3160bb78910dfee5bcc97819fc55fc10
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -16,6 +16,12 @@
 //      could not.
 //   4. The expired message no longer tells the reader to click a button the origin's screen has.
 // The send, the response handling and the read back are otherwise exactly the origin's.
+//
+// A FIFTH, ADDED ON 2026-09-21 BY backstage#51: the request body is built by a function of its own
+// and REFUSED when it is over what Gmail accepts, because a mail can now carry an attachment. Not a
+// fault in the origin, which cannot attach anything and so cannot reach the limit; a consequence of
+// a capability only this copy has. Adapted deliberately, with the digest re-recorded, which is the
+// route backstage#51 chose before the work started rather than when a gate refused (L263).
 import Foundation
 
 // The live MailSender: sends an approved message through the Gmail API. Fully async: it awaits the
@@ -55,6 +61,37 @@ public struct GmailSender: MailSender {
             signature: signature, fetch: fetch, onAuthExpired: onAuthExpired)
     }
 
+    // The exact bytes that would be POSTed, or a refusal because they are over what Gmail accepts.
+    //
+    // MEASURED ON THE REQUEST, NEVER ON THE FILE. backstage#51: an attachment grows roughly four
+    // fifths on the way here. It is base64 encoded into its own part, wrapped at 76, then the whole
+    // RFC 2822 message is base64url encoded into `raw`, then that is JSON escaped. A guard written
+    // against the attachment's own byte count admits a file that arrives over the limit and gets
+    // exactly the opaque 400 it exists to prevent, while reading as protection (L81, L63).
+    //
+    // Its own function, and internal rather than private, so the size can be measured in a test
+    // without a fetch and so the one number the refusal is about is the one the request carries.
+    static func encodedRequestBody(mail: OutgoingMail, fromName: String, fromEmail: String,
+                                   signature: MessageSignature) throws -> Data {
+        // Origin #2647: nothing is minted here. Gmail DISCARDS a client supplied Message-ID on
+        // users/me/messages/send and assigns its own, measured on a live mailbox 2026-08-13, so a
+        // minted value has never been on the wire. The real id is read back after the send instead.
+        let raw = GmailMessage.rawField(
+            fromName: fromName, fromEmail: fromEmail,
+            to: mail.to, subject: mail.subject, body: mail.body,
+            signature: signature, attachments: mail.attachments,
+            inReplyTo: mail.inReplyTo, references: mail.references)
+        // Including the original threadId tells Gmail to append this message to that conversation.
+        var payload: [String: Any] = ["raw": raw]
+        if let threadId = mail.threadId { payload["threadId"] = threadId }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        guard body.count <= GmailSendLimits.maxRequestBytes else {
+            throw GmailSendError.tooLarge(encodedBytes: body.count,
+                                          limitBytes: GmailSendLimits.maxRequestBytes)
+        }
+        return body
+    }
+
     // The testable core: encode the message, POST it, and interpret the response (success, api
     // error, or auth expired). The HTTP fetch and the auth expired hook are injected so a fake
     // response can drive each path without the network or a live token.
@@ -68,23 +105,16 @@ public struct GmailSender: MailSender {
         fetch: (URLRequest) async throws -> (Data, URLResponse),
         onAuthExpired: () async -> Void
     ) async throws -> SentReceipt {
-        // Origin #2647: nothing is minted here. Gmail DISCARDS a client supplied Message-ID on
-        // users/me/messages/send and assigns its own, measured on a live mailbox 2026-08-13, so a
-        // minted value has never been on the wire. The real id is read back below instead.
-        let raw = GmailMessage.rawField(
-            fromName: fromName, fromEmail: fromEmail,
-            to: mail.to, subject: mail.subject, body: mail.body,
-            signature: signature,
-            inReplyTo: mail.inReplyTo, references: mail.references)
+        // BUILT AND MEASURED BEFORE ANYTHING IS SENT (backstage#51). A body over what Gmail accepts
+        // is refused here rather than posted and answered with an opaque 400.
+        let body = try encodedRequestBody(mail: mail, fromName: fromName, fromEmail: fromEmail,
+                                          signature: signature)
 
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Including the original threadId tells Gmail to append this message to that conversation.
-        var payload: [String: Any] = ["raw": raw]
-        if let threadId = mail.threadId { payload["threadId"] = threadId }
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = body
 
         let (data, resp) = try await fetch(req)
         let http = resp as? HTTPURLResponse
@@ -150,13 +180,43 @@ public struct GmailSender: MailSender {
     }
 }
 
+// What Gmail accepts in one send, backstage#51.
+public enum GmailSendLimits {
+    // users.messages.send accepts a request of at most 5 MB. Read from Google's own reference for
+    // that method on 2026-09-21, which states the maximum alongside the 35 MB the resumable upload
+    // path allows. THE PREMISE IS RE-READABLE: if that page later says a different number, this
+    // constant is what moves, and the date above says how old the reading is (L316).
+    //
+    // 5,000,000 RATHER THAN 5 x 1024 x 1024, because the page says "5 MB" and does not say which
+    // megabyte it means. The two readings differ by about 240 KB, and only one of the two errors is
+    // harmless: refusing a message Gmail would have taken shows a person an honest refusal they can
+    // act on, while accepting one it rejects gives them an opaque 400 from the API. So this takes
+    // the smaller reading deliberately (L648).
+    public static let maxRequestBytes = 5_000_000
+}
+
 public enum GmailSendError: LocalizedError, Equatable {
     case api(String)
     case authExpired
+    // backstage#51. Both numbers are carried rather than only the message, so a consumer can show
+    // its own surface without parsing this sentence back apart.
+    case tooLarge(encodedBytes: Int, limitBytes: Int)
     public var errorDescription: String? {
         switch self {
         case .api(let m): return m
         case .authExpired: return "Gmail access expired or was revoked, so it needs connecting again."
+        case .tooLarge(let encodedBytes, let limitBytes):
+            // NAMES WHY THE TWO NUMBERS DIFFER FROM THE FILE ON DISK. Without that sentence this
+            // accuses a 5 MB attachment of being 9 MB, which reads as a fault in the attachment and
+            // sends somebody looking for one.
+            return "This message comes to \(megabytes(encodedBytes)) once encoded for sending, and "
+                + "Gmail accepts at most \(megabytes(limitBytes)). Attachments grow by roughly four "
+                + "fifths on the way, so a file well under that can still be too big. Send a smaller "
+                + "file, or fewer of them."
         }
+    }
+
+    private func megabytes(_ bytes: Int) -> String {
+        String(format: "%.1f MB", Double(bytes) / 1_000_000)
     }
 }
