@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 35da9a283912e325e920d3de320efd0d3160bb78910dfee5bcc97819fc55fc10
+// Ported-Adapted: 34429e12de71ef24ed71db16286c54f02f661ce60009af79595ecea1549c0eef
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -182,10 +182,19 @@ public struct GmailSender: MailSender {
 
 // What Gmail accepts in one send, backstage#51.
 public enum GmailSendLimits {
-    // users.messages.send accepts a request of at most 5 MB. Read from Google's own reference for
-    // that method on 2026-09-21, which states the maximum alongside the 35 MB the resumable upload
-    // path allows. THE PREMISE IS RE-READABLE: if that page later says a different number, this
-    // constant is what moves, and the date above says how old the reading is (L316).
+    // A CONSERVATIVE FLOOR, NOT A DOCUMENTED LIMIT, and the difference is the whole of this note.
+    //
+    // 5 MB is the figure backstage#51 recorded for users.messages.send. Google's own reference for
+    // that method was READ on 2026-09-21 and states no maximum upload size at all, and the
+    // "Upload attachments" guide beside it gives 5 MB only as general advice about when a simple
+    // upload is the right shape, never as this method's cap. So nothing here may be read as
+    // "Gmail's limit is 5 MB": what is true is that this package sends at most 5 MB in one request,
+    // which is at or below whatever Gmail's real ceiling is (L460, L249).
+    //
+    // THE ONLY THING THAT WOULD SETTLE IT is sending progressively larger mail through a live
+    // mailbox and finding where Gmail starts refusing, which nothing here has done. Until somebody
+    // does, a refusal at this number costs a person the ability to send a large file and never
+    // costs them an opaque 400, which is the right side to be wrong on.
     //
     // 5,000,000 RATHER THAN 5 x 1024 x 1024, because the page says "5 MB" and does not say which
     // megabyte it means. The two readings differ by about 240 KB, and only one of the two errors is
@@ -209,10 +218,13 @@ public enum GmailSendError: LocalizedError, Equatable {
             // NAMES WHY THE TWO NUMBERS DIFFER FROM THE FILE ON DISK. Without that sentence this
             // accuses a 5 MB attachment of being 9 MB, which reads as a fault in the attachment and
             // sends somebody looking for one.
+            // Says what this package does, not what Gmail permits: the ceiling here is a
+            // conservative floor under an undocumented one, so a sentence attributing it to Gmail
+            // would be claiming something nothing measured (L440).
             return "This message comes to \(megabytes(encodedBytes)) once encoded for sending, and "
-                + "Gmail accepts at most \(megabytes(limitBytes)). Attachments grow by roughly four "
-                + "fifths on the way, so a file well under that can still be too big. Send a smaller "
-                + "file, or fewer of them."
+                + "the most that can go in one send is \(megabytes(limitBytes)). Attachments grow by "
+                + "roughly four fifths on the way, so a file well under that can still be too big. "
+                + "Send a smaller file, or fewer of them."
         }
     }
 

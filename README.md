@@ -83,9 +83,9 @@ whether it is the whole message or the first part inside a mixed, and there is a
 round trip test per cell that decodes what was produced rather than matching the
 string the same change just wrote.
 
-**The size refusal is measured on the encoded request, never on the file.**
-Gmail's `users.messages.send` accepts at most 5 MB of request, and an attachment
-grows by roughly four fifths on the way there: base64 into its own part, wrapped
+**The size refusal is measured on the encoded request, never on the file.** The
+package sends at most 5 MB of request, and an attachment grows by roughly four
+fifths on the way there: base64 into its own part, wrapped
 at 76, then the whole message base64url encoded into `raw`, then JSON escaped. A
 guard written against the file's own byte count admits a 3 MB PDF that arrives as
 5.4 MB and gets exactly the opaque 400 the guard exists to prevent, while reading
@@ -93,9 +93,14 @@ as protection. `GmailSendError.tooLarge` carries both numbers, and the sentence 
 consumer can show says why they differ, because otherwise it accuses a 5 MB file
 of being 9 MB.
 
-`GmailSendLimits.maxRequestBytes` is 5,000,000 rather than 5 x 1024 x 1024,
-deliberately: Google's page says "5 MB" without saying which megabyte it means,
-and of the two errors only refusing slightly early is one a person can act on.
+`GmailSendLimits.maxRequestBytes` is a conservative floor rather than a
+documented limit, and the constant's own comment says so. Google's reference for
+`users.messages.send` was read on 2026-09-21 and states no maximum at all; 5 MB
+is the figure issue #51 recorded, and the uploads guide beside it gives 5 MB only
+as advice about when a simple upload is the right shape. Nothing here has
+measured where Gmail actually starts refusing. It is 5,000,000 rather than
+5 x 1024 x 1024 for the same reason: of the two errors, only refusing slightly
+early is one a person can act on.
 
 ## A test can never change a real Google login
 
