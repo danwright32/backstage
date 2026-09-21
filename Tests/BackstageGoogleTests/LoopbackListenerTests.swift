@@ -8,6 +8,10 @@ struct LoopbackListenerTests {
 
     // A bind refused for now is worth another attempt; anything else is reported at once, because
     // retrying a permanent failure spends the person's whole wait to reach the same answer (L110).
+    //
+    // It answers the same whether the port was assigned or NAMED by the consumer, which
+    // backstage#60 tried to change and measured its way back from: see the doc comment on
+    // `isTransientBindFailure`, and `LoopbackFixedPortTests` for the case that settled it.
     @Test func onlyMomentaryBindFailuresAreRetried() {
         #expect(LoopbackListener.isTransientBindFailure(.posix(.EADDRNOTAVAIL)))
         #expect(LoopbackListener.isTransientBindFailure(.posix(.EADDRINUSE)))

@@ -1,13 +1,18 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/LoopbackListener.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 12311fdc432905194fc854750e15a2a9240fe823da76339b305bb84fa64da3ad
+// Ported-Adapted: c9094fc97bb843b529d29f3c5a28bdee8a56f4c412b19f02dce786940ac91959
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
 //
 // TAKEN WHOLE, then given an injectable sleep and bind (backstage#13) so its retry schedule is
 // testable without waiting; the defaults are the origin's own. There is no OAuth flow without it: it is
-// the local server that
-// catches Google's redirect back to the app. Internal: only the auth manager calls it.
+// the local server that catches Google's redirect back to the app.
+//
+// ADAPTED AGAIN by backstage#60, and deliberately NOT a fault fix at the origin. It is PUBLIC now, with
+// the port a parameter, because this package has a second consumer whose redirect URI is registered at
+// a fixed port and therefore has to be built before anything is bound. Overture, the origin, assigns
+// its port and has no use for either change, so there is nothing here to fix there: this is the package
+// being a package (L263 covers the fault case, not this one).
 import Foundation
 import Network
 
@@ -18,14 +23,14 @@ import Network
 //   2. The real port is only valid once the listener reaches .ready. Reading it before
 //      then returns 0, which produced redirect_uri=http://127.0.0.1:0, an address the
 //      browser can't connect to, so the consent page never redirects back.
-enum LoopbackListener {
-    enum LoopbackError: LocalizedError {
+public enum LoopbackListener {
+    public enum LoopbackError: LocalizedError {
         case noPort, failed(String), timedOut
         // #3409: a bind refused at THIS instant, which is worth another attempt. A separate case rather
         // than a flag on `failed`, so the retry loop asks the error what it is instead of re-reading the
         // words somebody chose for it (L35).
         case bindRefusedForNow(String)
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .noPort: return "Local login listener never reported a port."
             case .failed(let m): return "Local login listener failed: \(m)"
@@ -48,7 +53,7 @@ enum LoopbackListener {
     /// NOT run at this value, because under parallel testing a saturated machine can delay the readiness
     /// callback by tens of seconds and the test would then be measuring the machine rather than the
     /// listener (#3266, L290); they pass their own far larger ceiling and assert this one separately.
-    static let defaultTimeout: TimeInterval = 10
+    public static let defaultTimeout: TimeInterval = 10
 
     /// How many times the bind is attempted before the failure is the answer (#3409).
     ///
@@ -64,22 +69,39 @@ enum LoopbackListener {
     ///
     /// Small on purpose. The attempts share the caller's deadline rather than each getting their own, so
     /// this is a number of tries inside one wait, not a multiplier on how long a person waits.
-    static let bindAttempts = 3
+    public static let bindAttempts = 3
 
     /// How long to wait before trying again. Short, because the condition being waited out is momentary
     /// and the waiting comes out of the caller's own budget.
-    static let bindRetryDelay: TimeInterval = 0.1
+    public static let bindRetryDelay: TimeInterval = 0.1
 
     /// Whether a bind failure is one that could plausibly clear on its own.
     ///
-    /// Only these two. A permanent failure (no permission, no route) has to be reported at once: retrying
-    /// it spends the person's whole timeout to arrive at the same answer more slowly (L110).
+    /// A permanent failure (no permission, no route) has to be reported at once: retrying it spends the
+    /// person's whole timeout to arrive at the same answer more slowly (L110).
     ///
     /// It reads the POSIX code out of the TYPED error rather than looking for digits in the text
     /// `NWError` renders, which is the whole reason this is decided here, at the one place the type still
     /// exists, and carried onward as its own error case (L35). The first version matched on the message,
     /// and a message is a rendering: it can be reworded by the framework, localised, or made to say
     /// `rawValue: 490` where a substring reader sees 49.
+    ///
+    /// EADDRINUSE STAYS TRANSIENT ON A NAMED PORT, and this was tried the other way first
+    /// (backstage#60). The argument for making it permanent there sounded right: on an assigned port a
+    /// busy address means the OS picked badly and picking again is the answer, while on a port the
+    /// consumer NAMED it looks like another process holds it and will still hold it in 100ms.
+    ///
+    /// MEASURED, and it is wrong. The first test written against the new behaviour bound an assigned
+    /// port, cancelled it and asked for that same port back, and got EADDRINUSE: `cancel()` returns
+    /// before the socket has finished winding down. So a named port has TWO causes for that code, a
+    /// process that holds it and a socket that is still letting go, they are indistinguishable from the
+    /// code alone, and the second is the common one. It is what happens when somebody presses Connect,
+    /// closes the window and presses Connect again.
+    ///
+    /// Retrying costs three attempts inside the caller's own wait, which is a fraction of a second, and
+    /// it rescues that case. Reporting at once would have turned the commonest retry into a refusal.
+    /// The attempts being spent is still its own message, `bindRefusedForNow`, so a port genuinely held
+    /// by something else is reported as such rather than as a generic failure.
     static func isTransientBindFailure(_ error: NWError) -> Bool {
         guard case .posix(let code) = error else { return false }
         return code == .EADDRNOTAVAIL || code == .EADDRINUSE
@@ -91,9 +113,32 @@ enum LoopbackListener {
         max(0, deadline - now)
     }
 
-    static func start(
+    /// The parameters every bind here uses, as their own function so what is ASKED FOR can be read
+    /// without binding anything (backstage#60). A test that binds and reads the result back cannot tell
+    /// a request for a port from the OS happening to assign that port.
+    ///
+    /// Bind to the IPv4 loopback only (#53): the OAuth redirect always comes from this machine's browser
+    /// to http://127.0.0.1, so there is no reason to accept connections on any other interface. Pinning
+    /// 127.0.0.1 also forces IPv4, without which `NWListener` can bind IPv6 and the redirect never
+    /// arrives (#51).
+    ///
+    /// `port` nil is the OS assigning one, which is what Gmail wants: it builds its redirect URI after
+    /// the bind, from the port that came back. A consumer that registered a fixed redirect URI names its
+    /// port instead, and then the port is part of the request rather than part of the answer.
+    static func parameters(port: UInt16?) -> NWParameters {
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        let endpointPort: NWEndpoint.Port = port.flatMap(NWEndpoint.Port.init(rawValue:)) ?? .any
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: endpointPort)
+        return params
+    }
+
+    public static func start(
         queue: DispatchQueue,
         timeout: TimeInterval = LoopbackListener.defaultTimeout,
+        // backstage#60: the port a consumer needs, or nil to let the OS assign one. Nil is the default,
+        // so every existing call site keeps the behaviour it was written against.
+        port: UInt16? = nil,
         log: (@Sendable (String) -> Void)? = nil,
         // backstage#13: the retry pause and the bind itself are injectable, so the retry schedule can
         // be asserted from the delays it ASKED FOR rather than lived through (L524). The defaults are
@@ -103,7 +148,10 @@ enum LoopbackListener {
         onConnection: @escaping @Sendable (NWConnection) -> Void
     ) async throws -> (listener: NWListener, port: UInt16) {
         let attemptBind = bind ?? { budget in
-            try await startOnce(queue: queue, timeout: budget, log: log, sleep: sleep, onConnection: onConnection)
+            try await startOnce(
+                queue: queue, timeout: budget, port: port, log: log, sleep: sleep,
+                onConnection: onConnection
+            )
         }
         let deadline = Date().timeIntervalSince1970 + timeout
         var lastError: Error = LoopbackError.timedOut
@@ -131,17 +179,12 @@ enum LoopbackListener {
     private static func startOnce(
         queue: DispatchQueue,
         timeout: TimeInterval,
+        port: UInt16?,
         log: (@Sendable (String) -> Void)?,
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void,
         onConnection: @escaping @Sendable (NWConnection) -> Void
     ) async throws -> (listener: NWListener, port: UInt16) {
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-        // Bind to the IPv4 loopback only (#53): the OAuth redirect always comes from this
-        // machine's browser to http://127.0.0.1, so there's no reason to accept connections
-        // on any other interface. Pinning 127.0.0.1 also forces IPv4. The real port is read
-        // after .ready below, so this no longer races to a 0 port (the #51 bug).
-        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        let params = parameters(port: port)
         let listener = try NWListener(using: params)
         listener.newConnectionHandler = onConnection
 

@@ -114,6 +114,45 @@ measured where Gmail actually starts refusing. It is 5,000,000 rather than
 5 x 1024 x 1024 for the same reason: of the two errors, only refusing slightly
 early is one a person can act on.
 
+## The loopback listener is public, and the port is the consumer's choice
+
+`LoopbackListener` is the local server that catches Google's redirect back to the
+app. It is public because it has two consumers with different needs, and it was
+internal until backstage#60, which is why Downbeat carried a copy of it that
+lacked both of this one's hard won fixes.
+
+    let (listener, port) = try await LoopbackListener.start(
+        queue: myQueue,
+        port: 8765,          // or nil to let the OS assign one
+        onConnection: { connection in ... }
+    )
+
+**`port: nil` is the OS assigning one**, which is what a consumer wants when it
+builds its redirect URI from the port that came back. **Naming a port** is what a
+consumer wants when it registered a fixed redirect URI and therefore has to build
+that URI before anything is bound. Neither is the right default for the other, so
+it is a parameter.
+
+Whichever is chosen, the bind is pinned to the IPv4 loopback. That is not
+tidiness: without it `NWListener` can bind IPv6, and Google redirects the browser
+to `http://127.0.0.1`, so the redirect never arrives and the sign in hangs with
+nothing to say (#51).
+
+**A bind refused with an address already in use is retried, on a named port too.**
+The opposite was implemented first and measured wrong. A named port has two causes
+for that code, another process holding it and a socket that has not finished
+letting go, they cannot be told apart from the code, and the second is the common
+one: it is what happens when somebody presses Connect, closes the window and
+presses Connect again. The three attempts cost a fraction of a second and rescue
+that case. When they are all spent the refusal says so in its own words, so a port
+genuinely held by something else still reads as that rather than as a generic
+failure.
+
+What the listener does NOT do is wait for the redirect, read the request, or
+answer the browser. Those live in `GmailAuthManager` and are Gmail's today;
+backstage#61 is lifting them out so a second consumer can share them.
+
+
 ## A test can never change a real Google login
 
 A credential write or delete inside a test run must target a **throwaway** path,
