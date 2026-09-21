@@ -64,7 +64,8 @@ import Foundation
 import BackstageGoogle
 @MainActor func make() throws -> GmailAuthManager {
     try GmailAuthManager(credentialsDirectory: URL(fileURLWithPath: "/tmp"),
-                         scopes: ["https://www.googleapis.com/auth/gmail.send"])
+                         scopes: ["https://www.googleapis.com/auth/gmail.send"],
+                         productName: "Consumer")
 }
 EOF
 GOOD_OUT="$(build)"; GOOD=$?
@@ -75,7 +76,8 @@ cat > "$C/Sources/Consumer/main.swift" <<'EOF'
 import Foundation
 import BackstageGoogle
 @MainActor func make() throws -> GmailAuthManager {
-    try GmailAuthManager(credentialsDirectory: URL(fileURLWithPath: "/tmp"))
+    try GmailAuthManager(credentialsDirectory: URL(fileURLWithPath: "/tmp"),
+                         productName: "Consumer")
 }
 EOF
 BAD_OUT="$(build)"; BAD=$?

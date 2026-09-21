@@ -148,9 +148,65 @@ that case. When they are all spent the refusal says so in its own words, so a po
 genuinely held by something else still reads as that rather than as a generic
 failure.
 
-What the listener does NOT do is wait for the redirect, read the request, or
-answer the browser. Those live in `GmailAuthManager` and are Gmail's today;
-backstage#61 is lifting them out so a second consumer can share them.
+## The redirect catch is shared too, and the tab says only what is true
+
+`LoopbackListener` is the bind. `GoogleRedirectCatcher` is everything that makes
+the bind useful: it waits for Google's redirect, reads the request line, answers
+the browser, matches the state, and hands back the code or a typed reason there
+is none.
+
+    let catcher = GoogleRedirectCatcher(productName: "Ovation",
+                                        expectedState: state,
+                                        port: nil,            // or 8765
+                                        queue: myQueue)
+    let port = try await catcher.start()
+    // build the redirect URI from that port, open the consent page
+    let code = try await catcher.awaitCode(timeout: 90)
+
+**What differs per consumer is an input**: the product name the tab is sent back
+to, the state to match, and the port. Everything else is one rule in one place.
+All four behaviours lived inside `GmailAuthManager` until backstage#61, which is
+why Downbeat carried its own copy of all four and the two spellings had already
+drifted apart. `GmailAuthManager` consumes this, so there is one implementation
+rather than a shared one beside the old one.
+
+**The state is required, and there is no way to ask for the match to be
+skipped.** It is the only thing standing between this port and a code somebody
+else put there, so a consumer that does not send one yet starts sending one.
+
+**The tab says only what is true when it is shown, and says which of the three
+things happened.** The page is written the moment the redirect lands, before the
+token exchange and before the save, either of which can still fail, so it never
+says the account is connected. The two copies disagreed in opposite directions
+and both had a point: this one was right that the page must not overclaim, and
+Downbeat's was right that somebody who was refused should read Google's own
+reason in the tab they are already looking at. Both hold now.
+
+**What Google said is escaped, not rendered.** Anything on this machine can open
+`http://127.0.0.1:<port>/?error=whatever`, so the reason quoted back in the page
+is written by whoever opened it. It is HTML escaped, and so is the product name.
+
+**Each way the catch can end is its own answer**: `refusedByGoogle(reason)`,
+`noCode`, `stateMismatch`, `timedOut`, `alreadyWaiting`. Google refusing consent
+used to arrive as "no code in redirect", which is what a malformed redirect says
+too, so the one thing a person needed in order to know whether trying again
+would help was the one thing discarded.
+
+**A consumer can end the wait with a reason of its own.** `abandon(reason:)`
+exists because the Gmail flow re-probes its listener while waiting and is the
+only thing that can see it die. Without it, the only way to report a dead
+listener would be to wait out the give-up window that fast failure exists to cut
+short.
+
+**An answer that arrives before anybody waits is kept, not lost.** The redirect
+can land between the bind returning and the wait starting. A catch that forgot
+that would leave the wait hanging for ever, which cannot be told from slowness
+and holds the port while it does.
+
+**`GmailAuthManager` takes a `productName`, required rather than defaulted**, for
+the same reason the scope list has no default: the page has to say where to go
+back to, three apps share this, and the only default available is "the app",
+which is every app.
 
 
 ## A test can never change a real Google login

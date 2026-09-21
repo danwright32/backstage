@@ -110,7 +110,7 @@ struct GmailConnectionIdentityTests {
         let dir = try scratch()
         let clock = Date(timeIntervalSince1970: 5_000)
         let manager = try GmailAuthManager(credentialsDirectory: dir, scopes: [send],
-                                           now: { clock })
+                                           productName: "Ovation", now: { clock })
         manager.throwawayRoot = dir
 
         try manager.persistExchangedTokens(OAuthTokens(accessToken: "at", refreshToken: "rt",
