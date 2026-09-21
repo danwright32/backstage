@@ -29,8 +29,10 @@ struct GmailSenderTests {
     private func send(_ script: Script, mail: OutgoingMail? = nil,
                       signature: MessageSignature = .none) async throws -> SentReceipt {
         try await GmailSender.performSend(
-            mail: mail ?? self.mail, fromName: "Sender", fromEmail: "sender@example.com",
-            token: "tok", signature: signature,
+            body: try GmailSender.encodedRequestBody(
+                mail: mail ?? self.mail, fromName: "Sender", fromEmail: "sender@example.com",
+                signature: signature),
+            token: "tok",
             fetch: { try script.fetch($0) },
             onAuthExpired: { script.authExpiredCalls += 1 })
     }
