@@ -186,8 +186,14 @@ reason in the tab they are already looking at. Both hold now.
 `http://127.0.0.1:<port>/?error=whatever`, so the reason quoted back in the page
 is written by whoever opened it. It is HTML escaped, and so is the product name.
 
+**One catch takes one port and answers once.** A second `start()` is refused
+rather than quietly replacing the listener, because the replaced one would hold
+its port for the life of the process, which is the exact condition that makes
+the next attempt bind somewhere Google is not redirecting to. A second wait is
+refused the same way.
+
 **Each way the catch can end is its own answer**: `refusedByGoogle(reason)`,
-`noCode`, `stateMismatch`, `timedOut`, `alreadyWaiting`. Google refusing consent
+`noCode`, `stateMismatch`, `timedOut`, `alreadyWaiting`, `alreadyStarted`. Google refusing consent
 used to arrive as "no code in redirect", which is what a malformed redirect says
 too, so the one thing a person needed in order to know whether trying again
 would help was the one thing discarded.

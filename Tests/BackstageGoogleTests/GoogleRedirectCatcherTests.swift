@@ -172,6 +172,17 @@ struct GoogleRedirectCatcherTests {
         #expect(asked.value == nil)
     }
 
+    // A catch takes ONE port and answers ONCE. A second start used to replace the listener without
+    // cancelling the first, so the abandoned one held its port for the life of the process, which is
+    // the exact condition that makes the next sign in bind somewhere Google is not redirecting to.
+    @Test func aSecondStartIsRefusedRatherThanAbandoningTheFirstPort() async throws {
+        let subject = catcher()
+        let port = try await subject.start()
+
+        await #expect(throws: GoogleRedirectCatcher.Failure.alreadyStarted) { _ = try await subject.start() }
+        #expect(subject.boundPort == port, "the catch moved to another port and left the first bound")
+    }
+
     // MARK: - the whole catch, over a real loopback port
 
     @Test func aRedirectCarryingTheCodeHandsItBack() async throws {

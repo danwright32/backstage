@@ -349,6 +349,7 @@ struct GmailAuthManagerTests {
         #expect(GmailAuthManager.authError(for: .refusedByGoogle("access_denied"))
                 == .consentRefused("access_denied"))
         #expect(GmailAuthManager.authError(for: .alreadyWaiting) == .alreadyConnecting)
+        #expect(GmailAuthManager.authError(for: .alreadyStarted) == .alreadyConnecting)
         if case .exchangeFailed(let why) = GmailAuthManager.authError(for: .timedOut) {
             #expect(why.contains("Timed out"))
         } else { Issue.record("a give up is not reported as one") }
@@ -423,7 +424,7 @@ struct GmailAuthManagerTests {
     // ---------- the package carries no consumer's voice ----------
 
     @Test func noMessageNamesAnyApp() throws {
-        let all: [GmailAuthManager.AuthError] = [.noClientConfig, .notConnected, .listenerFailed,
+        let all: [GmailAuthManager.AuthError] = [.noClientConfig, .notConnected,
             .listenerUnreachable, .stateMismatch, .exchangeFailed("x"), .refreshFailed("x"), .authExpired,
             .tokenSaveFailed, .alreadyConnecting, .noScopes, .consentRefused("x")]
         for e in all {
