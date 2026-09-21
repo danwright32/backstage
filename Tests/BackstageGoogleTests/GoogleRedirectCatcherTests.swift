@@ -276,10 +276,47 @@ struct GoogleRedirectCatcherTests {
     @Test func theReachabilityProbeDoesNotSettleTheWait() async throws {
         let subject = catcher()
         let port = try await subject.start()
-        let reachable = await GmailAuthManager.probeListenerReachable(
-            port: port, sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) })
-        #expect(reachable)
+        #expect(await subject.reachable())
         #expect(!subject.hasSettled, "the reachability probe settled the sign in")
+    }
+
+    // MARK: - whether the port is actually accepting
+
+    // A listener can report itself ready and hold no socket, which is what leaves a person looking
+    // at a browser tab that cannot connect. Asking the catch about its OWN port is the check, and
+    // it is the catch's to answer because the port is already there.
+    @Test func aLiveCatchSaysItsPortIsAccepting() async throws {
+        let subject = catcher()
+        _ = try await subject.start()
+        #expect(await subject.reachable())
+    }
+
+    // And it says no once the port has gone, which is the half that has to be true for the check to
+    // be worth making at all.
+    //
+    // WHAT THIS MEASURES, exactly: the ANSWER, which arrives on the deadline rather than from a
+    // refused connection. A connection to a closed local port reports itself waiting rather than
+    // failed, so the no comes from the timeout, and this test stays green if the failed branch is
+    // inverted. That is the shipped behaviour and the reason the check is documented as failing in
+    // about two seconds rather than at once; it is written down here so nobody reads this as
+    // covering that branch (L400).
+    @Test func aStoppedCatchSaysItsPortIsNotAccepting() async throws {
+        let subject = catcher()
+        _ = try await subject.start()
+        subject.stop()
+
+        var stillAccepting = true
+        for _ in 0..<200 where stillAccepting {
+            stillAccepting = await subject.reachable()
+            if stillAccepting { try await Task.sleep(nanoseconds: 10_000_000) }
+        }
+        #expect(!stillAccepting)
+    }
+
+    // NOT REACHABLE rather than a crash or a claim: a catch that never took a port has no port to
+    // answer about, and the answer a caller acts on must be the safe one.
+    @Test func aCatchThatNeverTookAPortIsNotReachable() async throws {
+        #expect(!(await catcher().reachable()))
     }
 
     // MARK: - giving up
@@ -337,8 +374,9 @@ struct GoogleRedirectCatcherTests {
 
         var stillAccepting = true
         for _ in 0..<200 where stillAccepting {
-            stillAccepting = await GmailAuthManager.probeListenerReachable(
-                port: port, sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) })
+            stillAccepting = await GoogleRedirectCatcher.isReachable(
+                port: port, queue: queue,
+                sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) })
             if stillAccepting { try await Task.sleep(nanoseconds: 10_000_000) }
         }
         #expect(!stillAccepting, "the listener is still holding 127.0.0.1:\(port)")

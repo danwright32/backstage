@@ -295,6 +295,23 @@ struct GmailAuthManagerTests {
         #expect(shown.contains("return to"), "the tab should send the person back to the app")
     }
 
+    // Origin #1163: a listener can report itself ready and hold no socket, and the only thing a
+    // person sees then is a browser tab that cannot connect to 127.0.0.1. So the port is checked
+    // before the consent page is opened, and a listener that accepts nothing is refused with no tab
+    // ever appearing, rather than after the whole give up window.
+    @Test func aListenerThatAcceptsNothingAbortsBeforeTheBrowserIsOpened() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let opened = Box(false)
+        let m = try manager(dir, fetch: { _ in throw URLError(.badURL) },
+                            openBrowser: { _ in opened.value = true })
+
+        await #expect(throws: GmailAuthManager.AuthError.listenerUnreachable) {
+            try await m.connect(probe: { _ in false })
+        }
+        #expect(!opened.value, "a tab was opened over a listener that accepts nothing")
+        #expect(!m.isConnected)
+    }
+
     // ---------- backstage#61: the catch is shared, and each way it can end is its own answer ----------
 
     // Google refusing consent arrives as "no code in redirect", which is what a malformed redirect

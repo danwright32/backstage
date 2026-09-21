@@ -165,6 +165,59 @@ public final class GoogleRedirectCatcher {
         }
     }
 
+    // MARK: - whether the port is actually accepting
+
+    /// Whether the port this catch took is accepting connections right now.
+    ///
+    /// A listener can report itself ready and hold no socket, and what that leaves a person looking
+    /// at is a browser tab that cannot connect to 127.0.0.1 with nothing anywhere saying why
+    /// (origin #1163). So the check is made before the consent page is opened, and again while the
+    /// wait is running, because a listener can also die AFTER the app goes to the background.
+    ///
+    /// FALSE when no port has been taken. A caller acts on this answer, and the one it can act on
+    /// safely is the one that does not claim a port it never had (L42).
+    ///
+    /// It lives here rather than in a consumer because the port is already here (backstage#63). It
+    /// was the Gmail flow's own until then, so the second consumer of the catch got the catch and
+    /// none of the fast failure around it.
+    public func reachable(timeout: TimeInterval = 2) async -> Bool {
+        guard let port = boundPort else { return false }
+        return await Self.isReachable(port: port, queue: queue, timeout: timeout, sleep: sleep)
+    }
+
+    /// The same check against any port, for a consumer holding one this catch did not take.
+    ///
+    /// Bounded by the injected sleep, so a wedged attempt cannot hang the flow it is protecting and
+    /// no test waits on it for real (L524).
+    public nonisolated static func isReachable(
+        port: UInt16,
+        queue: DispatchQueue,
+        timeout: TimeInterval = 2,
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void
+    ) async -> Bool {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return false }
+        let connection = NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp)
+        let once = ProbeLatch()
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    if once.fire() { cont.resume(returning: true) }
+                    connection.cancel()
+                case .failed, .cancelled:
+                    if once.fire() { cont.resume(returning: false) }
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            Task {
+                try? await sleep(timeout)
+                if once.fire() { cont.resume(returning: false); connection.cancel() }
+            }
+        }
+    }
+
     // MARK: - waiting for the redirect
 
     /// Waits for Google's redirect, answering with the code or throwing why there is none.
@@ -340,4 +393,12 @@ public final class GoogleRedirectCatcher {
         out = out.replacingOccurrences(of: "'", with: "&#39;")
         return out
     }
+}
+
+// One-shot resume guard for the reachability check: the connection's state handler and the timeout
+// task race to resolve the continuation, but a CheckedContinuation must resume exactly once.
+private final class ProbeLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func fire() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
 }
