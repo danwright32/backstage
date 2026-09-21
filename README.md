@@ -93,6 +93,18 @@ as protection. `GmailSendError.tooLarge` carries both numbers, and the sentence 
 consumer can show says why they differ, because otherwise it accuses a 5 MB file
 of being 9 MB.
 
+**A consumer can ask whether a mail fits before anybody presses send.**
+`MailSender.measure(_:)` answers with a `MailSizeMeasurement` carrying the
+encoded size, the limit and whether it fits, with no network call and without
+asking for a token, so it costs nothing to call every time somebody attaches a
+file. It is on the protocol rather than only on `GmailSender`, because a consumer
+holding the seam is the one that needs it. `NotConfiguredSender` refuses to
+measure exactly as it refuses to send: a sender that cannot send cannot say
+whether something would go through it.
+
+The number it reports is read off the same request body the send posts, so a
+screen cannot say a file fits while the send says it does not.
+
 `GmailSendLimits.maxRequestBytes` is a conservative floor rather than a
 documented limit, and the constant's own comment says so. Google's reference for
 `users.messages.send` was read on 2026-09-21 and states no maximum at all; 5 MB
