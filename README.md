@@ -198,6 +198,16 @@ used to arrive as "no code in redirect", which is what a malformed redirect says
 too, so the one thing a person needed in order to know whether trying again
 would help was the one thing discarded.
 
+**The catch answers whether its own port is actually accepting.** A listener can
+report itself ready and hold no socket, and what that leaves a person looking at
+is a browser tab that cannot connect to 127.0.0.1 with nothing saying why. So
+`reachable()` is asked before the consent page is opened, and again while the
+wait runs, because a listener can also die after the app goes to the background.
+It answers false when no port has been taken, because a caller acts on it.
+`isReachable(port:queue:...)` is the same check against a port the catch did not
+take. It was the Gmail flow's own until backstage#63, which meant a second
+consumer got the catch and none of the fast failure around it.
+
 **A consumer can end the wait with a reason of its own.** `abandon(reason:)`
 exists because the Gmail flow re-probes its listener while waiting and is the
 only thing that can see it die. Without it, the only way to report a dead
