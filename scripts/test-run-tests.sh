@@ -21,7 +21,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "test runner tests" 19
+harness_begin "test runner tests" 23
 
 TARGET="scripts/run-tests.sh"
 require_target "$TARGET"
@@ -108,6 +108,67 @@ check "failing swift tests fail the run" "$( [ "$CODE" -ne 0 ] && echo failed ||
 # swift failure is named after it and the run ends non zero, so a reader cannot
 # stop at the first summary and be wrong (L11).
 check "and the swift failure is named, not just counted" "$(says "$OUT" "swift tests FAILED")" "yes"
+
+# WHICH TEST FAILED, not merely that one did (backstage#55). The shell half names
+# its failing suite by name; this half printed the word FAILED and nothing else,
+# so a push refused by the gate said something in the package broke and gave no
+# way to know what without running the whole thing again by hand.
+swift_script() { printf '%s' "$2" > "$1/swift"; chmod +x "$1/swift"; }
+
+D="$(make_tree swift-fail-named)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+# The stub emits the REAL mark swift testing prints, built from its bytes with
+# \x escapes rather than typed, because this repository's style gate refuses a
+# literal one and bash 3.2 on macOS does not understand \u.
+swift_script "$D" '#!/bin/bash
+X=$(printf "\xe2\x9c\x98")
+echo "$X Test theRefusalNamesBothNumbers() recorded an issue at MailSizeRefusalTests.swift:73:6: Expectation failed"
+echo "$X Test theRefusalNamesBothNumbers() failed after 0.001 seconds with 1 issue."
+echo "$X Test run with 167 tests in 21 suites failed after 1.1 seconds with 1 issue."
+exit 1
+'
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "the failing swift test is named, not just counted" "$(says "$OUT" "theRefusalNamesBothNumbers")" "yes"
+
+# A BUILD THAT NEVER PRODUCED A TEST is the case with no test line to find, and the
+# one where saying nothing is worst: there is no test to re-run to see the error.
+D="$(make_tree swift-build-broken)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_script "$D" '#!/bin/bash
+echo "Compiling BackstageGoogle"
+echo "MailSender.swift:12:9: error: cannot find WidgetKind in scope"
+echo "error: fatalError"
+exit 1
+'
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a swift failure with no test lines still shows what went wrong" "$(says "$OUT" "cannot find WidgetKind in scope")" "yes"
+
+# CAPPED, because a suite that breaks everywhere would otherwise bury the shell
+# verdict above it under hundreds of lines, and the count says what was held back.
+D="$(make_tree swift-fail-many)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_script "$D" '#!/bin/bash
+X=$(printf "\xe2\x9c\x98")
+for i in $(seq 1 100); do echo "$X Test case$i() recorded an issue at A.swift:1:1"; done
+exit 1
+'
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a swift failure with many failures is capped and says how many were held back" "$(says "$OUT" "80 more")" "yes"
+
+# AND A GREEN RUN STAYS QUIET, or the runner's own verdict is lost in the noise of
+# a suite that had nothing wrong with it.
+D="$(make_tree swift-pass-noisy)"
+suite "$D/scripts/test-one.sh" 0
+printf '// a package\n' > "$D/Package.swift"
+swift_script "$D" '#!/bin/bash
+echo "$(printf "\xe2\x9c\x94") Test run with 167 tests in 21 suites passed after 1.1 seconds."
+exit 0
+'
+OUT="$(BACKSTAGE_PLATFORM=Darwin BACKSTAGE_SWIFT="$D/swift" BACKSTAGE_TEST_ROOT="$D" "$TARGET" 2>&1)"; CODE=$?
+check "a green swift run does not dump its output" "$(says "$OUT" "167 tests")" "no"
 
 # SKIPPED, AND SAID OUT LOUD. This is the case that would otherwise read exactly
 # like a full run on the platform where half the work cannot happen.
