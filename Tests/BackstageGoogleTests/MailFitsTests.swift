@@ -76,6 +76,29 @@ struct MailFitsTests {
         #expect(reached.fetchCalls == 0)
     }
 
+    // AND THE REFUSAL COMES BEFORE THE LOGIN (backstage#56). The size needs no token to measure, so
+    // an oversize message must not cost a round trip to Google on the way to being turned away. A
+    // refusal placed after a step it does not depend on makes the rare leftover happen on every
+    // ordinary refused attempt (L667).
+    @Test func anOversizeMailIsRefusedWithoutAskingForAToken() async throws {
+        let reached = Reached()
+        await #expect(throws: GmailSendError.self) {
+            _ = try await self.sender(reached: reached).send(try self.mail(attachmentBytes: self.limit))
+        }
+        #expect(reached.tokenCalls == 0)
+        #expect(reached.fetchCalls == 0)
+    }
+
+    // AND A MAIL THAT FITS STILL GETS ITS TOKEN, or the reordering would have refused everything
+    // rather than refusing early: a test that something did NOT happen is satisfied by a fixture
+    // where it COULD not (L159).
+    @Test func aMailThatFitsStillAsksForItsToken() async throws {
+        let reached = Reached()
+        _ = try? await sender(reached: reached).send(try mail(attachmentBytes: 1_000))
+        #expect(reached.tokenCalls == 1)
+        #expect(reached.fetchCalls == 1)
+    }
+
     // THE SIGNATURE IS PART OF WHAT SENDS, so it is part of what is measured. An HTML signature
     // adds a whole second copy of the body, which is exactly the sort of weight a measurement
     // taken from the mail alone would miss.

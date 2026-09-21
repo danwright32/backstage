@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: c8615e9fcd11628ce7e388266cf45095734b8e8255da1124930d96bf58537cc9
+// Ported-Adapted: 5eb56da915382320b047040fc0fbc01c8be93980eee278bbe4dedf1d32c34638
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -16,6 +16,11 @@
 //      could not.
 //   4. The expired message no longer tells the reader to click a button the origin's screen has.
 // The send, the response handling and the read back are otherwise exactly the origin's.
+//
+// A SEVENTH, ADDED ON 2026-09-21 BY backstage#56: the request is built and refused in `send`,
+// before the token is fetched, and `performSend` now takes the encoded bytes rather than the mail.
+// The origin's send has nothing to refuse, so again this is a consequence of a capability only
+// this copy has, adapted deliberately.
 //
 // A SIXTH, ADDED ON 2026-09-21 BY backstage#54: `measure`, which answers whether a mail would fit
 // without sending it, reading the size off the same request body the send posts. Adapted
@@ -70,10 +75,15 @@ public struct GmailSender: MailSender {
     }
 
     public func send(_ mail: OutgoingMail) async throws -> SentReceipt {
+        // BUILT AND REFUSED BEFORE THE LOGIN (backstage#56). Whether this fits needs no token to
+        // answer, and `token()` is the consumer's closure: for an expired credential it is a real
+        // refresh round trip to Google. A refusal placed after a step it does not depend on makes
+        // that happen on every ordinary refused attempt (L667).
+        let body = try GmailSender.encodedRequestBody(mail: mail, fromName: fromName,
+                                                      fromEmail: fromEmail, signature: signature)
         let resolved = try await token()
         return try await GmailSender.performSend(
-            mail: mail, fromName: fromName, fromEmail: fromEmail, token: resolved,
-            signature: signature, fetch: fetch, onAuthExpired: onAuthExpired)
+            body: body, token: resolved, fetch: fetch, onAuthExpired: onAuthExpired)
     }
 
     // The exact bytes that would be POSTed, or a refusal because they are over what Gmail accepts.
@@ -118,24 +128,20 @@ public struct GmailSender: MailSender {
         return try JSONSerialization.data(withJSONObject: payload)
     }
 
-    // The testable core: encode the message, POST it, and interpret the response (success, api
+    // The testable core: POST an already encoded request and interpret the response (success, api
     // error, or auth expired). The HTTP fetch and the auth expired hook are injected so a fake
     // response can drive each path without the network or a live token.
+    //
+    // IT TAKES THE BYTES, NOT THE MAIL (backstage#56). Building the request is what answers whether
+    // the message may be sent at all, and that answer is owed before a token is fetched, so the
+    // building moved up into `send` and this is left with the one job its name describes.
     @MainActor
     static func performSend(
-        mail: OutgoingMail,
-        fromName: String,
-        fromEmail: String,
+        body: Data,
         token: String,
-        signature: MessageSignature = .none,
         fetch: (URLRequest) async throws -> (Data, URLResponse),
         onAuthExpired: () async -> Void
     ) async throws -> SentReceipt {
-        // BUILT AND MEASURED BEFORE ANYTHING IS SENT (backstage#51). A body over what Gmail accepts
-        // is refused here rather than posted and answered with an opaque 400.
-        let body = try encodedRequestBody(mail: mail, fromName: fromName, fromEmail: fromEmail,
-                                          signature: signature)
-
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

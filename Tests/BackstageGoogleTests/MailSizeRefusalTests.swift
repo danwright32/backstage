@@ -38,10 +38,13 @@ struct MailSizeRefusalTests {
                                          body: "Attached.", attachments: [file]))
     }
 
+    // THROUGH THE LIVE SEND PATH, not the core beneath it: backstage#56 moved the refusal up into
+    // `send`, so a test that called the core directly would stop exercising the thing that refuses.
     private func send(_ mail: OutgoingMail, _ script: Script) async throws -> SentReceipt {
-        try await GmailSender.performSend(
-            mail: mail, fromName: "Sender", fromEmail: "sender@example.com", token: "tok",
-            fetch: { try script.fetch($0) }, onAuthExpired: {})
+        try await GmailSender(fromName: "Sender", fromEmail: "sender@example.com",
+                              token: { "tok" },
+                              fetch: { try script.fetch($0) },
+                              onAuthExpired: {}).send(mail)
     }
 
     // HALF THE LIMIT OF FILE reaches roughly nine tenths of the limit encoded, which is the point of
