@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 34429e12de71ef24ed71db16286c54f02f661ce60009af79595ecea1549c0eef
+// Ported-Adapted: c8615e9fcd11628ce7e388266cf45095734b8e8255da1124930d96bf58537cc9
 //
 // Ported on 2026-09-19 by backstage#2 (step 3). Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -16,6 +16,10 @@
 //      could not.
 //   4. The expired message no longer tells the reader to click a button the origin's screen has.
 // The send, the response handling and the read back are otherwise exactly the origin's.
+//
+// A SIXTH, ADDED ON 2026-09-21 BY backstage#54: `measure`, which answers whether a mail would fit
+// without sending it, reading the size off the same request body the send posts. Adapted
+// deliberately for the same reason as the fifth.
 //
 // A FIFTH, ADDED ON 2026-09-21 BY backstage#51: the request body is built by a function of its own
 // and REFUSED when it is over what Gmail accepts, because a mail can now carry an attachment. Not a
@@ -54,6 +58,17 @@ public struct GmailSender: MailSender {
         self.onAuthExpired = onAuthExpired
     }
 
+    // backstage#54. Pure: no network call, no token, so a consumer can ask this every time
+    // somebody attaches a file. It reads the size off the SAME request body the send would post,
+    // which is what stops a screen saying a file fits while the send says it does not.
+    public func measure(_ mail: OutgoingMail) throws -> MailSizeMeasurement {
+        MailSizeMeasurement(
+            encodedBytes: try GmailSender.requestBody(mail: mail, fromName: fromName,
+                                                      fromEmail: fromEmail,
+                                                      signature: signature).count,
+            limitBytes: GmailSendLimits.maxRequestBytes)
+    }
+
     public func send(_ mail: OutgoingMail) async throws -> SentReceipt {
         let resolved = try await token()
         return try await GmailSender.performSend(
@@ -73,6 +88,22 @@ public struct GmailSender: MailSender {
     // without a fetch and so the one number the refusal is about is the one the request carries.
     static func encodedRequestBody(mail: OutgoingMail, fromName: String, fromEmail: String,
                                    signature: MessageSignature) throws -> Data {
+        let body = try requestBody(mail: mail, fromName: fromName, fromEmail: fromEmail,
+                                   signature: signature)
+        let measured = MailSizeMeasurement(encodedBytes: body.count,
+                                           limitBytes: GmailSendLimits.maxRequestBytes)
+        guard measured.fits else {
+            throw GmailSendError.tooLarge(encodedBytes: measured.encodedBytes,
+                                          limitBytes: measured.limitBytes)
+        }
+        return body
+    }
+
+    // The bytes that would be POSTed, with no judgement about whether they may be. ONE definition,
+    // read by the refusal above and by `measure`, so the number a consumer shows before the send
+    // and the number the refusal reports after it cannot be two numbers (backstage#54, L70).
+    static func requestBody(mail: OutgoingMail, fromName: String, fromEmail: String,
+                            signature: MessageSignature) throws -> Data {
         // Origin #2647: nothing is minted here. Gmail DISCARDS a client supplied Message-ID on
         // users/me/messages/send and assigns its own, measured on a live mailbox 2026-08-13, so a
         // minted value has never been on the wire. The real id is read back after the send instead.
@@ -84,12 +115,7 @@ public struct GmailSender: MailSender {
         // Including the original threadId tells Gmail to append this message to that conversation.
         var payload: [String: Any] = ["raw": raw]
         if let threadId = mail.threadId { payload["threadId"] = threadId }
-        let body = try JSONSerialization.data(withJSONObject: payload)
-        guard body.count <= GmailSendLimits.maxRequestBytes else {
-            throw GmailSendError.tooLarge(encodedBytes: body.count,
-                                          limitBytes: GmailSendLimits.maxRequestBytes)
-        }
-        return body
+        return try JSONSerialization.data(withJSONObject: payload)
     }
 
     // The testable core: encode the message, POST it, and interpret the response (success, api

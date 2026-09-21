@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/MailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: d54a1866acb799b883a4654ccc43ecab48df89fba3935bca8e87f1a7a2545a6f
+// Ported-Adapted: 9b84598bcbec5247434cbf824318235ebdef2b74cc32c51507c6e7079415da85
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -8,6 +8,11 @@
 // package must not carry and this repository's own secrets guard refuses. And its refusal message
 // named that app's account; this one is shown by three apps, so it says only what is true of all.
 // The types are public, since they are the send API every consumer builds against.
+//
+// A FOURTH, ADDED ON 2026-09-21 BY backstage#54: MailSizeMeasurement, and `measure` on the
+// MailSender protocol, so a consumer can ask whether a mail fits before anybody presses send. Same
+// reasoning as the third: a capability the origin has no use for, adapted deliberately rather than
+// diverged, because there is no fix pending at the origin to wait on.
 //
 // A THIRD, ADDED ON 2026-09-21 BY backstage#51: MailAttachment, and `attachments` on OutgoingMail.
 // This is NOT a fault in the origin and is not fixed there. Overture cannot attach a file and has
@@ -163,8 +168,37 @@ public struct SentReceipt: Equatable, Sendable {
     }
 }
 
+// What a message would weigh on the wire, and whether it fits. backstage#54.
+//
+// THE SAME MEASUREMENT THE REFUSAL USES, asked as a question. Computing it a second way would give
+// a number that agrees with the refusal until the day it does not, and nothing could then say
+// which of the two was wrong (L70). So there is one function that builds the request and both the
+// question and the refusal read its size.
+public struct MailSizeMeasurement: Equatable, Sendable {
+    // The whole request as it would be posted, not the attachment's own byte count: those differ by
+    // roughly four fifths and only the first one is the number anything applies a limit to (L81).
+    public var encodedBytes: Int
+    public var limitBytes: Int
+
+    public init(encodedBytes: Int, limitBytes: Int) {
+        self.encodedBytes = encodedBytes
+        self.limitBytes = limitBytes
+    }
+
+    public var fits: Bool { encodedBytes <= limitBytes }
+}
+
 public protocol MailSender: Sendable {
     func send(_ mail: OutgoingMail) async throws -> SentReceipt
+
+    // Whether this mail would go through THIS sender, answered without a network call and without
+    // asking for a token, so a consumer can say so while somebody is still choosing the file
+    // rather than after they have pressed send.
+    //
+    // ON THE PROTOCOL rather than only on GmailSender, because a consumer holding the seam is the
+    // one that needs it, and a question it can only ask of the concrete type is a question the
+    // whole seam exists to avoid having to reach past.
+    func measure(_ mail: OutgoingMail) throws -> MailSizeMeasurement
 }
 
 public enum MailSenderError: LocalizedError, Equatable {
@@ -183,6 +217,13 @@ public struct NotConfiguredSender: MailSender {
     public init() {}
 
     public func send(_ mail: OutgoingMail) async throws -> SentReceipt {
+        throw MailSenderError.notConfigured
+    }
+
+    // A sender that cannot send cannot say whether something would fit through it either. It says
+    // the same thing it says about sending, rather than inventing a limit for a route nothing can
+    // take, which would read as a real answer (L11).
+    public func measure(_ mail: OutgoingMail) throws -> MailSizeMeasurement {
         throw MailSenderError.notConfigured
     }
 }
