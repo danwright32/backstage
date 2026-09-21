@@ -34,8 +34,9 @@ struct GmailAuthManagerTests {
     private func manager(_ dir: URL, fetch: (@Sendable (URLRequest) async throws -> (Data, URLResponse))? = nil,
                          openBrowser: (@MainActor (URL) -> Void)? = nil,
                          sleep: (@Sendable (TimeInterval) async throws -> Void)? = nil,
+                         productName: String = "Ovation",
                          loginHint: String? = nil) throws -> GmailAuthManager {
-        try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, loginHint: loginHint,
+        try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, productName: productName, loginHint: loginHint,
                              now: { [t0] in t0 }, sleep: sleep, fetch: fetch, openBrowser: openBrowser)
     }
 
@@ -45,7 +46,7 @@ struct GmailAuthManagerTests {
     // consumer). Naming an EMPTY list compiles, so it is refused here, by name, at construction.
     @Test func anEmptyScopeListIsRefused() throws {
         #expect(throws: GmailAuthManager.AuthError.noScopes) {
-            _ = try GmailAuthManager(credentialsDirectory: try scratch(), scopes: [])
+            _ = try GmailAuthManager(credentialsDirectory: try scratch(), scopes: [], productName: "Ovation")
         }
     }
 
@@ -294,13 +295,75 @@ struct GmailAuthManagerTests {
         #expect(shown.contains("return to"), "the tab should send the person back to the app")
     }
 
+    // ---------- backstage#61: the catch is shared, and each way it can end is its own answer ----------
+
+    // Google refusing consent arrives as "no code in redirect", which is what a malformed redirect
+    // also says, so the one thing the person needed (Google's own reason) is the one thing thrown
+    // away. Distinct causes get distinct messages (L11).
+    @Test func aConsentGoogleRefusedCarriesGooglesOwnReason() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let m = try manager(dir,
+            fetch: { _ in throw URLError(.badURL) },
+            openBrowser: { url in
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let state = items.first { $0.name == "state" }?.value ?? ""
+                let redirect = items.first { $0.name == "redirect_uri" }?.value ?? ""
+                Task.detached { _ = try? await URLSession(configuration: .ephemeral)
+                    .data(from: URL(string: "\(redirect)/?error=access_denied&state=\(state)")!) }
+            })
+        await #expect(throws: GmailAuthManager.AuthError.consentRefused("access_denied")) {
+            try await m.connect()
+        }
+        #expect(!m.isConnected)
+    }
+
+    // The package names no app, so the name in the tab is the consumer's and comes from the
+    // consumer. Without it the page can only say "the app", which is every app.
+    @Test func theTabNamesTheProductTheConsumerGave() async throws {
+        let dir = try scratch(); try writeClient(dir)
+        let page = Box<String?>(nil)
+        let m = try manager(dir,
+            fetch: { [self] req in self.response(400, #"{"error":"invalid_grant"}"#, req) },
+            openBrowser: { url in
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let state = items.first { $0.name == "state" }?.value ?? ""
+                let redirect = items.first { $0.name == "redirect_uri" }?.value ?? ""
+                Task.detached {
+                    let got = try? await URLSession(configuration: .ephemeral)
+                        .data(from: URL(string: "\(redirect)/?code=c&state=\(state)")!)
+                    page.value = got.map { String(decoding: $0.0, as: UTF8.self) } ?? ""
+                }
+            },
+            productName: "Rehearsal Diary")
+        do { try await m.connect(); Issue.record("expected the exchange to fail") } catch { }
+        for _ in 0..<500 where page.value == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(try #require(page.value).contains("Rehearsal Diary"),
+                "the tab does not say where to go back to")
+
+    }
+
+    // Every way the catch can end has its own answer here. A mapping falling through to one shared
+    // error would give two causes one message, which is the defect above in another form (L11).
+    @Test func everyWayTheCatchCanEndHasItsOwnAnswer() {
+        #expect(GmailAuthManager.authError(for: .stateMismatch) == .stateMismatch)
+        #expect(GmailAuthManager.authError(for: .refusedByGoogle("access_denied"))
+                == .consentRefused("access_denied"))
+        #expect(GmailAuthManager.authError(for: .alreadyWaiting) == .alreadyConnecting)
+        if case .exchangeFailed(let why) = GmailAuthManager.authError(for: .timedOut) {
+            #expect(why.contains("Timed out"))
+        } else { Issue.record("a give up is not reported as one") }
+        if case .exchangeFailed(let why) = GmailAuthManager.authError(for: .noCode) {
+            #expect(why.contains("no code"))
+        } else { Issue.record("a redirect carrying no code is not reported as one") }
+    }
+
     // ---------- backstage#15: a blip and an outage are different events ----------
 
     private func failingRefresh(_ dir: URL, status: Int = 503, clock: Box<Date>) throws -> GmailAuthManager {
         try writeClient(dir)
         _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
         let answer = Box(status)
-        return try GmailAuthManager(credentialsDirectory: dir, scopes: scopes,
+        return try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, productName: "Ovation",
             now: { clock.value },
             fetch: { [self] req in
                 answer.value == 200
@@ -337,7 +400,8 @@ struct GmailAuthManagerTests {
         let dir = try scratch(); try writeClient(dir)
         _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: GmailCredentials.tokenURL(in: dir))
         let answer = Box(503)
-        let m = try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, now: { clock.value },
+        let m = try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, productName: "Ovation",
+            now: { clock.value },
             fetch: { [self] req in
                 answer.value == 200 ? self.response(200, #"{"access_token":"at","expires_in":1}"#, req)
                                     : self.response(503, "gateway", req) })
@@ -361,7 +425,7 @@ struct GmailAuthManagerTests {
     @Test func noMessageNamesAnyApp() throws {
         let all: [GmailAuthManager.AuthError] = [.noClientConfig, .notConnected, .listenerFailed,
             .listenerUnreachable, .stateMismatch, .exchangeFailed("x"), .refreshFailed("x"), .authExpired,
-            .tokenSaveFailed, .alreadyConnecting, .noScopes]
+            .tokenSaveFailed, .alreadyConnecting, .noScopes, .consentRefused("x")]
         for e in all {
             let m = (e.errorDescription ?? "").lowercased()
             #expect(!m.contains("overture") && !m.contains("click") && !m.contains("connect gmail"), "\(e): \(m)")

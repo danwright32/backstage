@@ -107,7 +107,8 @@ struct CredentialWriteRefusalTests {
     @Test @MainActor func disconnectIsRefusedWhenItWouldDeleteALivePath() throws {
         let real = try scratch()
         let manager = try GmailAuthManager(credentialsDirectory: real,
-                                           scopes: ["https://www.googleapis.com/auth/gmail.send"])
+                                           scopes: ["https://www.googleapis.com/auth/gmail.send"],
+                                           productName: "Ovation")
         let target = GmailCredentials.tokenURL(in: real)
         #expect(try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt"), to: target,
                                                 throwaway: real))

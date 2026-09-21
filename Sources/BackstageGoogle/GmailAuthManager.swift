@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 77a25589e29619b06f563bcfb880d52afab585851a49115557a431941b83ee2c
+// Ported-Adapted: a9f619e016aff4092cfea39375ec23d17bc39b7fdefa8d3fab767396eddf13b3
 // Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
@@ -19,6 +19,13 @@
 //   7. backstage#13: every wait (the give up, the heartbeat, the probe and the listener's retry)
 //      runs on the one injected sleep, and every "now" on the injected clock.
 //   8. The messages name no app and no app's button.
+//   9. backstage#61: the redirect catch is NOT here. Waiting for Google's redirect, reading the
+//      request line, answering the browser and matching the state were four behaviours of this type
+//      that a second consumer of the same catch could not reach, so it carried its own copy of all
+//      four. They live in `GoogleRedirectCatcher` now and this consumes it, which is what makes it
+//      one implementation rather than a shared one beside the old one (L613, L370). The consumer
+//      names its product, because the page the browser is left showing has to say where to go back
+//      to and the package names no app.
 // The flow itself, and the reasoning recorded against each part of it, are the origin's.
 import Foundation
 import AppKit
@@ -34,6 +41,10 @@ public final class GmailAuthManager {
         case noClientConfig, notConnected, listenerFailed, listenerUnreachable, stateMismatch
         case exchangeFailed(String), refreshFailed(String), authExpired, tokenSaveFailed, alreadyConnecting
         case noScopes
+        // backstage#61: Google itself said no. Its own word for why is the only thing that tells a
+        // person whether to try again or to change something, and it used to be discarded into
+        // "no code in redirect", which is what a malformed redirect says too (L11).
+        case consentRefused(String)
         public var errorDescription: String? {
             switch self {
             case .noClientConfig: return "The Gmail client configuration is missing."
@@ -47,6 +58,7 @@ public final class GmailAuthManager {
             case .tokenSaveFailed: return "Couldn't save the Gmail credentials to disk. Check available storage and try again."
             case .alreadyConnecting: return "A Gmail sign-in is already in progress. Finish it in the browser."
             case .noScopes: return "No Gmail permissions were named, so there is nothing to ask Google for."
+            case .consentRefused(let why): return "Google did not grant access: \(why)"
             }
         }
     }
@@ -77,6 +89,10 @@ public final class GmailAuthManager {
 
     public let scopes: [String]
     public let loginHint: String?
+    /// What the browser tab is sent back to. Required rather than defaulted, for the reason the
+    /// scope list is: a default here would be chosen once and inherited silently by three apps, and
+    /// the only default available ("the app") is every app.
+    public let productName: String
     private let clientURL: URL
     private let tokenURL: URL
     // WHAT COUNTS AS A THROWAWAY CREDENTIALS PATH inside a test run (backstage#44),
@@ -92,6 +108,7 @@ public final class GmailAuthManager {
 
     public init(credentialsDirectory: URL,
                 scopes: [String],
+                productName: String,
                 loginHint: String? = nil,
                 log: (@Sendable (String) -> Void)? = nil,
                 now: @escaping @Sendable () -> Date = { Date() },
@@ -102,6 +119,7 @@ public final class GmailAuthManager {
                 openBrowser: (@MainActor (URL) -> Void)? = nil) throws {
         guard !scopes.isEmpty else { throw AuthError.noScopes }
         self.scopes = scopes
+        self.productName = productName
         self.loginHint = loginHint
         self.clientURL = GmailCredentials.clientConfigURL(in: credentialsDirectory)
         self.tokenURL = GmailCredentials.tokenURL(in: credentialsDirectory)
@@ -112,11 +130,9 @@ public final class GmailAuthManager {
         self.openBrowser = openBrowser
     }
 
-    private var listener: NWListener?
-    private var pendingState: String?
-    private var pendingPKCE: PKCE?
-    private var codeContinuation: CheckedContinuation<String, Error>?
-    private var timeoutTask: Task<Void, Never>?
+    // backstage#61: the whole redirect catch, which used to be four methods and four fields here.
+    // One per attempt, because a catch answers once and then lets its port go.
+    private var catcher: GoogleRedirectCatcher?
     // Origin #1167: re-probes the listener partway through the wait. The pre-browser probe cannot catch a
     // listener that only dies AFTER the app backgrounds during consent, so this catches that residual case
     // and fails fast instead of waiting out the whole give-up window.
@@ -173,22 +189,26 @@ public final class GmailAuthManager {
         // Cancel any half-finished PRIOR attempt. The latch guarantees this never runs against a live one.
         cancelInFlight()
 
-        let port = try await startListener()
+        // The state is minted BEFORE the bind, because the catch matches against it and a catch
+        // that took its state later would have a window where it matched nothing.
+        let pkce = GoogleOAuth.makePKCE(verifierBytes: Self.randomBytes(32))
+        let state = Self.randomURLSafe(16)
+        let catcher = GoogleRedirectCatcher(productName: productName, expectedState: state,
+                                            queue: Self.listenerQueue, log: log, sleep: sleep)
+        self.catcher = catcher
+        let port = try await catcher.start()
         log?("listener ready on 127.0.0.1:\(port)")
 
         // Origin #1163: confirm the just-bound listener actually accepts a connection BEFORE opening the
         // browser, so a dead listener fails in about two seconds with a retryable error and no dead tab.
-        guard await probe(UInt16(port)) else {
+        guard await probe(port) else {
             log?("listener probe failed on 127.0.0.1:\(port); aborting before opening the browser")
-            stopListener()
+            catcher.stop()
+            self.catcher = nil
             throw AuthError.listenerUnreachable
         }
 
         let redirect = "http://127.0.0.1:\(port)"
-        let pkce = GoogleOAuth.makePKCE(verifierBytes: Self.randomBytes(32))
-        let state = Self.randomURLSafe(16)
-        pendingState = state
-        pendingPKCE = pkce
 
         let config = OAuthConfig(clientId: client.clientId, clientSecret: client.clientSecret,
                                  redirectURI: redirect, scopes: scopes)
@@ -196,33 +216,34 @@ public final class GmailAuthManager {
         open(authURL)
         log?("opened browser to Google; awaiting redirect on port \(port)")
 
-        // Auto give up, so a caller can never wait for ever if the redirect never arrives.
-        timeoutTask?.cancel()
-        timeoutTask = Task { [weak self] in
-            try? await sleep(hardTimeout)
-            await MainActor.run { self?.failTimeout() }
-        }
-
         // Origin #1167: heartbeat. Re-probe while waiting; if the listener has gone unreachable and no
-        // redirect has arrived, fail fast rather than waiting out the give up.
+        // redirect has arrived, fail fast rather than waiting out the give up. It is the one fault
+        // only this consumer can see, which is why the catch takes a reason from outside at all.
         heartbeatTask?.cancel()
         heartbeatTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await sleep(heartbeatInterval) } catch { return }
-                guard let self, !Task.isCancelled, self.codeContinuation != nil else { return }
-                if await probe(UInt16(port)) { continue }
-                guard self.codeContinuation != nil else { return }
-                self.failListenerDied()
+                guard let self, !Task.isCancelled, catcher.isWaiting else { return }
+                if await probe(port) { continue }
+                guard catcher.isWaiting else { return }
+                self.log?("listener went unreachable mid-wait; failing fast before the give-up window")
+                catcher.abandon(reason: AuthError.listenerUnreachable)
                 return
             }
         }
 
-        let code = try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
-            codeContinuation = c
+        // The give up lives in the catch, on the same injected clock, so there is one deadline
+        // rather than one here and another inside what it is waiting on.
+        let code: String
+        do {
+            code = try await catcher.awaitCode(timeout: hardTimeout)
+        } catch {
+            heartbeatTask?.cancel()
+            self.catcher = nil
+            throw (error as? GoogleRedirectCatcher.Failure).map(Self.authError(for:)) ?? error
         }
-        timeoutTask?.cancel()
         heartbeatTask?.cancel()
-        stopListener()
+        self.catcher = nil
 
         let tokens = try await exchange(config: config, code: code, pkce: pkce)
         try persistExchangedTokens(tokens)
@@ -332,89 +353,32 @@ public final class GmailAuthManager {
         }
     }
 
-    private func startListener() async throws -> Int {
-        let log = self.log
-        let (listener, port) = try await LoopbackListener.start(
-            queue: Self.listenerQueue, log: log, sleep: sleep
-        ) { [weak self] conn in
-            conn.start(queue: Self.listenerQueue)
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
-                let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                Task { @MainActor in self?.handleRedirect(request: request, conn: conn) }
-            }
+    /// Every way the catch can end, answered in this manager's own vocabulary.
+    ///
+    /// A `switch` over the whole enum rather than a lookup with a default, so a new way for the
+    /// catch to end does not compile until somebody decides what it means here (L113).
+    nonisolated static func authError(for failure: GoogleRedirectCatcher.Failure) -> AuthError {
+        switch failure {
+        case .stateMismatch: return .stateMismatch
+        case .refusedByGoogle(let why): return .consentRefused(why)
+        case .noCode: return .exchangeFailed("no code in redirect")
+        case .timedOut:
+            return .exchangeFailed("Timed out waiting for Google. Close any old browser tabs and try again.")
+        // The catch is one per attempt and the re-entrancy latch already refuses a second connect,
+        // so this is the same condition reaching the same answer by a second route rather than a
+        // state nothing can produce.
+        case .alreadyWaiting: return .alreadyConnecting
         }
-        self.listener = listener
-        return Int(port)
     }
-
-    private func handleRedirect(request: String, conn: NWConnection) {
-        let firstLine = request.split(separator: "\r\n").first.map(String.init) ?? ""
-        let path = firstLine.split(separator: " ").dropFirst().first.map(String.init) ?? ""
-        let comps = URLComponents(string: "http://127.0.0.1\(path)")
-        let code = comps?.queryItems?.first { $0.name == "code" }?.value
-        let state = comps?.queryItems?.first { $0.name == "state" }?.value
-
-        // Origin #1163: only a genuine OAuth redirect resolves the waiting sign-in. A connection carrying
-        // neither a code nor a state is the health probe, a port scan or a prefetch, and resolving the
-        // waiter from one would fail a healthy connect with a bogus mismatch.
-        guard code != nil || state != nil else {
-            log?("ignored a non-redirect connection (no code or state)")
-            conn.cancel(); return
-        }
-        log?("redirect received by the listener")
-
-        // backstage#25: the page says only what is true WHEN IT IS SHOWN. It is answered the moment the
-        // code arrives, before the exchange and the save, either of which can still fail, so it must not
-        // say the account is connected (L12, L11). The app reports the real outcome where the person is.
-        let body = "<html><body style='font-family:-apple-system;padding:40px'>Google's response reached the app. You can close this tab and return to it.</body></html>"
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-        conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in conn.cancel() })
-
-        let cont = codeContinuation
-        codeContinuation = nil
-        guard state == pendingState else { cont?.resume(throwing: AuthError.stateMismatch); return }
-        guard let code else { cont?.resume(throwing: AuthError.exchangeFailed("no code in redirect")); return }
-        cont?.resume(returning: code)
-    }
-
-    private func stopListener() { listener?.cancel(); listener = nil }
 
     private func cancelInFlight() {
-        if codeContinuation != nil { log?("tearing down an attempt that was still waiting for the redirect") }
-        timeoutTask?.cancel(); timeoutTask = nil
+        if catcher?.isWaiting == true { log?("tearing down an attempt that was still waiting for the redirect") }
         heartbeatTask?.cancel(); heartbeatTask = nil
-        stopListener()
-        let cont = codeContinuation
-        codeContinuation = nil
-        pendingState = nil
-        pendingPKCE = nil
-        cont?.resume(throwing: CancellationError())
-    }
-
-    private func failTimeout() {
-        guard codeContinuation != nil else { return }
-        log?("timed out waiting for the redirect")
-        timeoutTask?.cancel(); timeoutTask = nil
-        heartbeatTask?.cancel(); heartbeatTask = nil
-        stopListener()
-        let cont = codeContinuation
-        codeContinuation = nil
-        pendingState = nil
-        pendingPKCE = nil
-        cont?.resume(throwing: AuthError.exchangeFailed("Timed out waiting for Google. Close any old browser tabs and try again."))
-    }
-
-    private func failListenerDied() {
-        guard codeContinuation != nil else { return }
-        log?("listener went unreachable mid-wait; failing fast before the give-up window")
-        timeoutTask?.cancel(); timeoutTask = nil
-        heartbeatTask?.cancel(); heartbeatTask = nil
-        stopListener()
-        let cont = codeContinuation
-        codeContinuation = nil
-        pendingState = nil
-        pendingPKCE = nil
-        cont?.resume(throwing: AuthError.listenerUnreachable)
+        // Abandoning releases the port with it, so no route ends an attempt while leaving its
+        // listener holding 127.0.0.1 for the life of the process.
+        catcher?.abandon(reason: CancellationError())
+        catcher?.stop()
+        catcher = nil
     }
 
     // MARK: - randomness
