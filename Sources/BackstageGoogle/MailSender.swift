@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/MailSender.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 4bdb2689a9a556340c28d6f35acfa15520313df1e543dc5c8eff8fb402792522
+// Ported-Adapted: d54a1866acb799b883a4654ccc43ecab48df89fba3935bca8e87f1a7a2545a6f
 //
 // Ported on 2026-09-19 by backstage#2. Do not edit this copy to fix a fault that is also in
 // the origin: fix it there and re-port (L263).
@@ -8,11 +8,63 @@
 // package must not carry and this repository's own secrets guard refuses. And its refusal message
 // named that app's account; this one is shown by three apps, so it says only what is true of all.
 // The types are public, since they are the send API every consumer builds against.
+//
+// A THIRD, ADDED ON 2026-09-21 BY backstage#51: MailAttachment, and `attachments` on OutgoingMail.
+// This is NOT a fault in the origin and is not fixed there. Overture cannot attach a file and has
+// never needed to; Ovation needs to put a rendered invoice in a client's inbox (ovation#42). So the
+// route taken is the first of the two backstage#51 named, DELIBERATELY ADAPTED with the digest
+// re-recorded, rather than a divergence pending a fix at the origin: there is no pending fix to
+// wait for. If Overture ever grows attachments, it grows them from here rather than the other way
+// round, because this is the copy that has them (L263).
 import Foundation
 
 // The seam between a consumer and actually sending mail. A real implementation calls the Gmail API
 // for whichever account the consumer authorized. Until one is connected, NotConfiguredSender lets the
 // whole send pipeline build, test and run without sending anything.
+
+// A file riding along with a message: what it is called, what it is, and its bytes.
+//
+// NONE OF THE THREE CAN BE MISSING, so this init is failable in the same way OutgoingMail's is. An
+// attachment is not a thing that degrades gracefully: an empty file reaches the recipient as a
+// document that will not open, and an unnamed one as a blob. Each of those is a detection that
+// something upstream went wrong, so it blocks the send rather than labelling it (L67).
+public struct MailAttachment: Equatable, Sendable {
+    public private(set) var filename: String
+    // Validated at construction as one type and one subtype, and lowercased. Validated HERE rather
+    // than sanitised at the point it is written into the part, because the reader of this value is
+    // a MIME header: a type carrying a `;` would add a parameter to that header and a type carrying
+    // a line break would add a header. A writer accepts only what its reader can consume (L150).
+    public private(set) var mimeType: String
+    public private(set) var data: Data
+
+    public init?(filename: String, mimeType: String, data: Data) {
+        let name = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !data.isEmpty,
+              let type = MailAttachment.validContentType(mimeType),
+              // The filename is the one value here a caller can make arbitrarily long, and it lands
+              // in two headers. Measured as the rendered line rather than as a character count,
+              // because percent encoding makes one accented character nine characters (L81).
+              GmailMessage.filenameFitsItsHeaderLines(name, mimeType: type) else { return nil }
+        self.filename = name
+        self.mimeType = type
+        self.data = data
+    }
+
+    // RFC 2045: type "/" subtype, each a token, which excludes space, control characters and the
+    // tspecials. Returned lowercased, or nil, which is the whole vocabulary this accepts.
+    private static func validContentType(_ raw: String) -> String? {
+        let tspecials = Set("()<>@,;:\\\"/[]?=")
+        func isToken(_ s: Substring) -> Bool {
+            !s.isEmpty && s.allSatisfy { c in
+                c.isASCII && !c.isWhitespace && !c.isNewline
+                    && !tspecials.contains(c) && (c.asciiValue ?? 0) > 31 && (c.asciiValue ?? 0) != 127
+            }
+        }
+        let pieces = raw.split(separator: "/", omittingEmptySubsequences: false)
+        guard pieces.count == 2, isToken(pieces[0]), isToken(pieces[1]) else { return nil }
+        return raw.lowercased()
+    }
+}
 
 public struct OutgoingMail: Equatable, Sendable {
     // #2030: a list, because one message can name several people (milestone "One email to several
@@ -21,6 +73,11 @@ public struct OutgoingMail: Equatable, Sendable {
     public private(set) var to: [String]
     public var subject: String
     public var body: String
+    // backstage#51: the files riding with this message, empty on a message that carries none, which
+    // is every message this package sent before that issue. The message FORM is chosen from this
+    // and from the sender's signature together, so all four combinations exist and all four are
+    // built in GmailMessage rather than three of them plus a special case.
+    public var attachments: [MailAttachment] = []
     // Threading (#74): a follow-up replies onto the original thread with `inReplyTo` + `threadId`.
     //
     // #2672: there is no `messageID` here any more. It was the caller's chance to STAMP a message with an
@@ -50,6 +107,7 @@ public struct OutgoingMail: Equatable, Sendable {
     // the screen above it did. The subject is kept verbatim rather than trimmed here: what he approved is
     // what sends, and this only decides whether there is one at all.
     public init?(to: [String], subject: String, body: String,
+          attachments: [MailAttachment] = [],
           inReplyTo: String? = nil, references: String? = nil,
           threadId: String? = nil) {
         let addresses = to.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -58,6 +116,7 @@ public struct OutgoingMail: Equatable, Sendable {
         self.to = addresses
         self.subject = subject
         self.body = body
+        self.attachments = attachments
         self.inReplyTo = inReplyTo
         self.references = references
         self.threadId = threadId

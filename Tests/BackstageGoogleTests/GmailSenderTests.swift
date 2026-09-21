@@ -63,6 +63,24 @@ struct GmailSenderTests {
         #expect(raw.contains("<p>Regards</p>"))
     }
 
+    // backstage#51: the attachment is on the MAIL and the signature is on the SENDER, so the wire
+    // form is decided from two places. This is the one test that walks the whole way from an
+    // OutgoingMail to the bytes posted, decoded rather than matched as a string (L52).
+    @Test func anAttachmentOnTheMailReachesTheWire() async throws {
+        let script = Script([(200, sentBody), (200, readBack)])
+        let file = try #require(MailAttachment(filename: "invoice.pdf", mimeType: "application/pdf",
+                                               data: Data([0x25, 0x50, 0x44, 0x46, 0x00, 0xFF])))
+        let withFile = try #require(OutgoingMail(to: ["client@example.com"], subject: "Invoice 1042",
+                                                 body: "Attached.", attachments: [file]))
+        _ = try await send(script, mail: withFile,
+                           signature: MessageSignature(plainText: "Best", html: "<p>Best</p>"))
+        let posted = try MIMEReader.parse(try decodedRaw(script.requests[0]))
+        #expect(posted.contentType == "multipart/mixed")
+        #expect(posted.parts.map(\.contentType) == ["multipart/alternative", "application/pdf"])
+        #expect(posted.parts[1].dispositionFilename == "invoice.pdf")
+        #expect(posted.parts[1].body == file.data)
+    }
+
     @Test func aReplyCarriesItsThreadToGmail() async throws {
         let script = Script([(200, sentBody), (200, readBack)])
         let reply = OutgoingMail(to: ["c@example.com"], subject: "Re", body: "b", threadId: "t9")!

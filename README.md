@@ -57,6 +57,46 @@ evidence the grant is still live. With an OAuth client in Testing status the
 refresh token expires every seven days, and a dead local copy otherwise reads
 exactly like a live one.
 
+## An outgoing mail can carry attachments, and the refusal is on the request
+
+`OutgoingMail.attachments` is a list of `MailAttachment`, empty by default. A
+`MailAttachment` needs all three of a filename, a content type and some bytes,
+and its init is failable, so an empty file or an unnamed one cannot be
+constructed at all rather than reaching somebody's inbox as a document that will
+not open. The content type is validated as one type and one subtype: it lands in
+a MIME header, so a type carrying a semicolon would add a parameter to that
+header and one carrying a line break would add a header.
+
+**The message form is chosen from two places, so there are four of them.** The
+sender's signature decides whether there is a `text/html` part; the mail decides
+whether there are attachments; the two are independent.
+
+|                 | no attachment           | attachment                              |
+|-----------------|-------------------------|-----------------------------------------|
+| plain signature | one `text/plain` part   | `multipart/mixed`                       |
+| HTML signature  | `multipart/alternative` | `multipart/mixed` wrapping that alternative |
+
+Written as "become mixed when there is an attachment", the fourth cell loses its
+HTML part or ends the outer multipart with the inner one's closing delimiter. So
+the readable text of a message is built once, as a MIME entity that is the same
+whether it is the whole message or the first part inside a mixed, and there is a
+round trip test per cell that decodes what was produced rather than matching the
+string the same change just wrote.
+
+**The size refusal is measured on the encoded request, never on the file.**
+Gmail's `users.messages.send` accepts at most 5 MB of request, and an attachment
+grows by roughly four fifths on the way there: base64 into its own part, wrapped
+at 76, then the whole message base64url encoded into `raw`, then JSON escaped. A
+guard written against the file's own byte count admits a 3 MB PDF that arrives as
+5.4 MB and gets exactly the opaque 400 the guard exists to prevent, while reading
+as protection. `GmailSendError.tooLarge` carries both numbers, and the sentence a
+consumer can show says why they differ, because otherwise it accuses a 5 MB file
+of being 9 MB.
+
+`GmailSendLimits.maxRequestBytes` is 5,000,000 rather than 5 x 1024 x 1024,
+deliberately: Google's page says "5 MB" without saying which megabyte it means,
+and of the two errors only refusing slightly early is one a person can act on.
+
 ## A test can never change a real Google login
 
 A credential write or delete inside a test run must target a **throwaway** path,

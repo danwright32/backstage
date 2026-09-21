@@ -1,8 +1,16 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailMessage.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: f276779ee5eaab458d03262ae41b146328a5582a3f2bf2552c8972444c0c34de
+// Ported-Adapted: d96a8fb69becc287dbd846ab6623ec9cc0ee603a12bdd39d86b15125ded7e30d
 //
 // Ported on 2026-09-19 by backstage#2 (step 2). Do not edit this copy to fix a fault that is also
 // in the origin: fix it there and re-port (L263).
+//
+// ADAPTED AGAIN ON 2026-09-21 BY backstage#51, which added attachments. That is a CAPABILITY THE
+// ORIGIN DOES NOT HAVE rather than a fault in it: Overture cannot attach a file and has never had
+// to, and Ovation has to put a rendered invoice in a client's inbox (ovation#42). So this took the
+// first of the two routes backstage#51 set out before the work started, DELIBERATELY ADAPTED with
+// the digest re-recorded, rather than a divergence pending a fix at the origin, because there is no
+// fix pending there to wait for. Written down here rather than left to be inferred, so nobody
+// later has to guess which of the two happened (L263).
 //
 // DELIBERATE CHANGES, each for the principle that the package carries no consumer's content:
 // the three preview helpers are gone (Dan, 2026-09-18: Ovation renders its own review surfaces);
@@ -40,12 +48,29 @@ enum GmailMessage {
     // copy-inventory:ignore-start  RFC822 headers: a mail server reads these, not Dan (#915)
 
     // An RFC 2822 message. From is the authorized sender; the subject is RFC 2047 encoded only when it
-    // contains non-ASCII (e.g. an accented org name) so headers stay 7-bit clean. #1144: when the
-    // signature carries HTML the message is multipart/alternative (a text/plain part plus a text/html part
-    // that renders the styled Gmail signature); otherwise it stays a single text/plain part. The sign-off
-    // is appended HERE, once, so no body producer carries its own.
+    // contains non-ASCII (e.g. an accented org name) so headers stay 7-bit clean. The sign-off is
+    // appended HERE, once, so no body producer carries its own.
+    //
+    // THE SHAPE IS CHOSEN FROM TWO SOURCES AND THERE ARE FOUR ANSWERS, not two (backstage#51). The
+    // SIGNATURE decides whether there is a text/html part (#1144), and the MAIL decides whether
+    // there are attachments, and the two are independent:
+    //
+    //                      no attachment                attachment
+    //     plain signature  one text/plain part          multipart/mixed
+    //     HTML signature   multipart/alternative        multipart/mixed wrapping an alternative
+    //
+    // Written as "become mixed when there is an attachment", the fourth cell loses its HTML part or
+    // ends the outer multipart with the inner one's closing delimiter. So the readable text of the
+    // message is built ONCE, by textEntity, as a MIME entity that is the same whether it is the
+    // whole message or the first part inside a mixed. There is no fourth shape to get wrong.
     static func rfc822(fromName: String, fromEmail: String, to: [String], subject: String, body: String,
-                       signature: MessageSignature = .none, boundary: String? = nil,
+                       signature: MessageSignature = .none,
+                       attachments: [MailAttachment] = [],
+                       boundary: String? = nil,
+                       // The boundary of the alternative NESTED inside a mixed, which must not be the
+                       // mixed's own: one boundary used for both ends the outer multipart at the inner
+                       // one's closing delimiter and every part after it disappears.
+                       alternativeBoundary: String? = nil,
                        inReplyTo: String? = nil,
                        references: String? = nil) -> String {
         // backstage#4, PRD 5.10b. EVERY value that reaches a header passes through headerSafe first.
@@ -84,35 +109,114 @@ enum GmailMessage {
         if let refs = references ?? inReplyTo, !refs.isEmpty {
             headers.append("References: \(refs)")
         }
-        let plainBody = plainBody(body: body, signature: signature)
-        if let htmlPart = htmlPart(body: body, signature: signature) {
-            let b = boundary ?? freshBoundary()
-            headers += [
-                "MIME-Version: 1.0",
-                "Content-Type: multipart/alternative; boundary=\"\(b)\"",
-                "",
-                "--\(b)",
-                "Content-Type: text/plain; charset=UTF-8",
-                "Content-Transfer-Encoding: 8bit",
-                "",
-                plainBody,
-                "--\(b)",
-                "Content-Type: text/html; charset=UTF-8",
-                "Content-Transfer-Encoding: 8bit",
-                "",
-                htmlPart,
-                "--\(b)--",
-            ]
+        let text = textEntity(plainBody: plainBody(body: body, signature: signature),
+                              htmlPart: htmlPart(body: body, signature: signature),
+                              // The alternative's boundary when the text is the whole message, and the
+                              // NESTED one when it is a part inside a mixed. Two names so the second
+                              // case cannot accidentally reuse the first's.
+                              boundary: (attachments.isEmpty ? boundary : alternativeBoundary) ?? freshBoundary())
+        headers.append("MIME-Version: 1.0")
+        if attachments.isEmpty {
+            headers += text
         } else {
-            headers += [
-                "MIME-Version: 1.0",
-                "Content-Type: text/plain; charset=UTF-8",
-                "Content-Transfer-Encoding: 8bit",
-                "",
-                plainBody,
-            ]
+            let mixed = boundary ?? freshBoundary()
+            headers += ["Content-Type: multipart/mixed; boundary=\"\(mixed)\"", "", "--\(mixed)"]
+            headers += text
+            for attachment in attachments {
+                headers += ["--\(mixed)"] + attachmentEntity(attachment)
+            }
+            headers.append("--\(mixed)--")
         }
         return headers.joined(separator: "\r\n")
+    }
+
+    // The readable text of the message as a MIME entity: its own Content-* headers, a blank line, and
+    // its body. ONE definition, used whether this is the whole message or the first part of a mixed,
+    // which is what stops the attachment cases being a second implementation of the plain ones.
+    private static func textEntity(plainBody: String, htmlPart: String?, boundary: String) -> [String] {
+        guard let htmlPart else {
+            return ["Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "",
+                    plainBody]
+        }
+        return [
+            "Content-Type: multipart/alternative; boundary=\"\(boundary)\"",
+            "",
+            "--\(boundary)",
+            "Content-Type: text/plain; charset=UTF-8",
+            "Content-Transfer-Encoding: 8bit",
+            "",
+            plainBody,
+            "--\(boundary)",
+            "Content-Type: text/html; charset=UTF-8",
+            "Content-Transfer-Encoding: 8bit",
+            "",
+            htmlPart,
+            "--\(boundary)--",
+        ]
+    }
+
+    // One attachment as a MIME entity. backstage#51.
+    //
+    // THE FILENAME REACHES TWO HEADERS, so it goes through headerSafe like every other value that
+    // reaches one, and then through a parameter encoding that cannot end the quoted string it sits
+    // in. The content type needs neither: MailAttachment refuses anything that is not one type and
+    // one subtype, so by here it holds no separator and no line break.
+    private static func attachmentEntity(_ attachment: MailAttachment) -> [String] {
+        let lines = attachmentHeaderLines(mimeType: attachment.mimeType,
+                                          encodedName: parameterEncoded(headerSafe(attachment.filename)))
+        return [lines[0], "Content-Transfer-Encoding: base64", lines[1], ""]
+            + base64Lines(attachment.data)
+    }
+
+    // A header parameter's value, with the `=` or `*=` that introduces it, because which one it is
+    // depends on the value. ASCII travels quoted, with the two characters that could end the quoted
+    // string escaped. Anything else travels RFC 2231 style, percent encoded with its charset named,
+    // which is the standard's own answer and keeps every header seven bit clean. Returned WITH its
+    // operator so a call site cannot pair `*=` with a quoted value, which no receiver would decode.
+    static func parameterEncoded(_ value: String) -> String {
+        if value.allSatisfy(\.isASCII) {
+            let escaped = value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "=\"\(escaped)\""
+        }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "!#$&+-.^_`|~")
+        let percent = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+        return "*=UTF-8''\(percent)"
+    }
+
+    // RFC 5322's hard limit on a line: 998 characters, not counting the CRLF. Everything else this
+    // writes into a header is bounded by the package, and a FILENAME is not, so it is the only value
+    // a caller can use to breach it. Refused at construction rather than truncated or folded here,
+    // because a truncated filename is a document arriving under a name nobody chose (backstage#51).
+    static let maxHeaderLineLength = 998
+
+    // Whether this attachment's two filename headers fit on their lines. MEASURED ON THE RENDERED
+    // LINE, using the SAME encoder that will render it, so the check and the writer cannot disagree
+    // about how long a name gets: one accented character becomes nine characters percent encoded,
+    // which a check on the name's own length does not see (L81).
+    static func filenameFitsItsHeaderLines(_ filename: String, mimeType: String) -> Bool {
+        let name = parameterEncoded(headerSafe(filename))
+        return attachmentHeaderLines(mimeType: mimeType, encodedName: name)
+            .allSatisfy { $0.count <= maxHeaderLineLength }
+    }
+
+    // The two headers a filename reaches, in ONE definition, so the check above and the entity below
+    // are asking about the same lines rather than two copies that drift apart.
+    private static func attachmentHeaderLines(mimeType: String, encodedName: String) -> [String] {
+        ["Content-Type: \(mimeType); name\(encodedName)",
+         "Content-Disposition: attachment; filename\(encodedName)"]
+    }
+
+    // base64, wrapped at 76 characters, which is the longest line RFC 2045 allows an encoded body.
+    // One enormous line is refused or silently rewrapped on the way, and a rewrap corrupts what it
+    // rewraps.
+    private static func base64Lines(_ data: Data) -> [String] {
+        data.base64EncodedString(options: [.lineLength76Characters,
+                                           .endLineWithCarriageReturn, .endLineWithLineFeed])
+            .components(separatedBy: "\r\n")
+            .filter { !$0.isEmpty }
     }
 
     // The text/html part: the drafted body, HTML-escaped and newline-to-<br> so it can't inject markup and
@@ -134,10 +238,11 @@ enum GmailMessage {
 
     static func rawField(fromName: String, fromEmail: String, to: [String], subject: String, body: String,
                          signature: MessageSignature = .none,
+                         attachments: [MailAttachment] = [],
                          inReplyTo: String? = nil,
                          references: String? = nil) -> String {
         base64url(Data(rfc822(fromName: fromName, fromEmail: fromEmail, to: to, subject: subject, body: body,
-                              signature: signature,
+                              signature: signature, attachments: attachments,
                               inReplyTo: inReplyTo,
                               references: references).utf8))
     }
