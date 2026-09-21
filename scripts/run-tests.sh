@@ -79,6 +79,42 @@ echo "ran $EXECUTED of $DISCOVERED suites, ${#FAILED[@]} failed"
 # Both seams exist so the runner's own suite can drive every branch without
 # shelling out to the real toolchain, which would measure the toolchain rather
 # than this decision (L2, L291).
+# WHICH TEST FAILED, not merely that one did (backstage#55).
+#
+# Every shell suite is named when it fails. The swift half sent its output to
+# /dev/null and printed the word FAILED, so a push refused by the gate said
+# something among 167 tests broke and gave no way to know what without running the
+# whole thing again by hand. Two outcomes that need different actions were told
+# apart only by re-running (L11).
+#
+# MATCHED ON WORDS, NOT ON THE MARK swift testing prints. The mark differs between
+# swift testing and XCTest and is a glyph this repository's style gate refuses to
+# hold anyway, while "recorded an issue", "failed after" and "error:" are what both
+# runners and the compiler actually write.
+#
+# AND A BUILD THAT NEVER PRODUCED A TEST is the case with NO test line to find, and
+# the one where saying nothing is worst, because there is no test to re-run to see
+# the error. So nothing matching is not nothing wrong: the tail is shown instead,
+# and it says that is what it is (L98).
+SWIFT_FAILURE_LINES=20
+report_swift_failure() {
+    local log="$1" matched total
+    matched="$(grep -E 'recorded an issue|failed after|error:|^Test Case .*failed' "$log" 2>/dev/null)"
+    if [ -z "$matched" ]; then
+        echo "    no failing test or compiler error could be picked out of its output,"
+        echo "    so here are its last $SWIFT_FAILURE_LINES lines:"
+        tail -n "$SWIFT_FAILURE_LINES" "$log" | sed 's/^/    /'
+        return
+    fi
+    total="$(printf '%s\n' "$matched" | wc -l | tr -d ' ')"
+    printf '%s\n' "$matched" | head -n "$SWIFT_FAILURE_LINES" | sed 's/^/    /'
+    # CAPPED, and the count says what was held back, or a suite that breaks
+    # everywhere buries the shell verdict above it under hundreds of lines.
+    if [ "$total" -gt "$SWIFT_FAILURE_LINES" ]; then
+        echo "    (and $((total - SWIFT_FAILURE_LINES)) more, run swift test to see them all)"
+    fi
+}
+
 SWIFT_FAILED=0
 if [ -f "Package.swift" ]; then
     PLATFORM="${BACKSTAGE_PLATFORM:-$(uname -s)}"
@@ -86,11 +122,18 @@ if [ -f "Package.swift" ]; then
     if [ "$PLATFORM" != "Darwin" ]; then
         echo "swift tests SKIPPED: this package is macOS only (it imports AppKit and Network), and this is $PLATFORM."
         echo "    That is not the same as the swift tests passing."
-    elif "$SWIFT" test > /dev/null 2>&1; then
-        echo "swift tests passed"
     else
-        echo "swift tests FAILED"
-        SWIFT_FAILED=1
+        # CAPTURED RATHER THAN DISCARDED, and only shown on a failure: a green run
+        # that dumped a hundred lines of its own would bury this runner's verdict.
+        SWIFT_LOG="$(mktemp)"
+        if "$SWIFT" test > "$SWIFT_LOG" 2>&1; then
+            echo "swift tests passed"
+        else
+            echo "swift tests FAILED"
+            report_swift_failure "$SWIFT_LOG"
+            SWIFT_FAILED=1
+        fi
+        rm -f "$SWIFT_LOG"
     fi
 fi
 
