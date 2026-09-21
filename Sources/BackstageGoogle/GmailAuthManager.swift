@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: a9f619e016aff4092cfea39375ec23d17bc39b7fdefa8d3fab767396eddf13b3
+// Ported-Adapted: 04f33c3a8fdccb9a4aacea9ec7eaad50eed64c81445cd373166676e7688186c0
 // Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
@@ -26,6 +26,9 @@
 //      one implementation rather than a shared one beside the old one (L613, L370). The consumer
 //      names its product, because the page the browser is left showing has to say where to go back
 //      to and the package names no app.
+//  10. backstage#64: no `listenerFailed`. The origin publishes it and throws it from nothing; here a
+//      bind that fails reaches the consumer as the listener's OWN typed error, which says which of
+//      the bind failures it was, so a second generic sentence beside it could only be less true.
 // The flow itself, and the reasoning recorded against each part of it, are the origin's.
 import Foundation
 import AppKit
@@ -38,7 +41,7 @@ import Network
 public final class GmailAuthManager {
 
     public enum AuthError: LocalizedError, Equatable {
-        case noClientConfig, notConnected, listenerFailed, listenerUnreachable, stateMismatch
+        case noClientConfig, notConnected, listenerUnreachable, stateMismatch
         case exchangeFailed(String), refreshFailed(String), authExpired, tokenSaveFailed, alreadyConnecting
         case noScopes
         // backstage#61: Google itself said no. Its own word for why is the only thing that tells a
@@ -49,7 +52,6 @@ public final class GmailAuthManager {
             switch self {
             case .noClientConfig: return "The Gmail client configuration is missing."
             case .notConnected: return "Gmail isn't connected yet."
-            case .listenerFailed: return "Couldn't open the local sign-in listener."
             case .listenerUnreachable: return "Couldn't start the Gmail sign-in on this Mac, so the browser was not opened."
             case .stateMismatch: return "The sign-in response didn't match the request. Try again."
             case .exchangeFailed(let m): return "Sign-in failed: \(m)"
@@ -364,10 +366,11 @@ public final class GmailAuthManager {
         case .noCode: return .exchangeFailed("no code in redirect")
         case .timedOut:
             return .exchangeFailed("Timed out waiting for Google. Close any old browser tabs and try again.")
-        // The catch is one per attempt and the re-entrancy latch already refuses a second connect,
-        // so this is the same condition reaching the same answer by a second route rather than a
-        // state nothing can produce.
-        case .alreadyWaiting: return .alreadyConnecting
+        // Two ways of saying one thing to a person: a catch that has already taken its port and one
+        // that is already being waited on are both a sign-in under way. They stay separate where
+        // they are produced, because there they are different faults, and meet here because the
+        // person's answer to both is the same one (L260).
+        case .alreadyWaiting, .alreadyStarted: return .alreadyConnecting
         }
     }
 

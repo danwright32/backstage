@@ -51,6 +51,7 @@ public final class GoogleRedirectCatcher {
         case stateMismatch
         case timedOut
         case alreadyWaiting
+        case alreadyStarted
 
         public var errorDescription: String? {
             switch self {
@@ -59,6 +60,7 @@ public final class GoogleRedirectCatcher {
             case .stateMismatch: return "The sign-in response didn't match the request. Try again."
             case .timedOut: return "Timed out waiting for Google's response."
             case .alreadyWaiting: return "A sign-in is already waiting on this listener."
+            case .alreadyStarted: return "This sign-in listener has already taken its port."
             }
         }
     }
@@ -127,6 +129,12 @@ public final class GoogleRedirectCatcher {
     /// for a redirect to it.
     @discardableResult
     public func start(timeout: TimeInterval = LoopbackListener.defaultTimeout) async throws -> UInt16 {
+        // ONE CATCH, ONE PORT. Without this a second start replaced the listener without cancelling
+        // it, and the abandoned one held its port for the life of the process, which is the exact
+        // condition that makes the next attempt bind somewhere Google is not redirecting to.
+        // Refused rather than made idempotent: a caller that started twice meant one of them, and
+        // handing back the first port would be answering a question it did not ask.
+        guard listener == nil, boundPort == nil else { throw Failure.alreadyStarted }
         let queue = self.queue
         let onConnection: @Sendable (NWConnection) -> Void = { [weak self] connection in
             connection.start(queue: queue)
