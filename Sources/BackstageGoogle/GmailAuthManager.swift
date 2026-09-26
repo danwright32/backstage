@@ -1,5 +1,5 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GmailAuthManager.swift @ 0bb3869c8f71777d08712e9fa146fd07c6da699f
-// Ported-Adapted: 416c881ddb71df5ef95ca4ea6a7615e480dee3f87a523379f67defcfcbc39df2
+// Ported-Adapted: b5b961793796847f8df1130dac88cf51ff0c0f9b2a9d7e882c3b361adbf09c7e
 // Ported-Divergence: danwright32/overture#4035
 //
 // Ported on 2026-09-19 by backstage#2 (step 4b). Do not edit this copy to fix a fault that is also in
@@ -32,6 +32,10 @@
 //  11. backstage#63: the reachability check is not here either. It is the catch's, because the port
 //      is the catch's; this asks the catch about it, before the browser and again on the heartbeat.
 //      The injectable probe seam stays, so no suite binds anything to drive either side of it.
+//  12. backstage#68: the grant stored is the one Google REPORTED in its reply's `scope`, on the code
+//      exchange and on every refresh, never the request. A reply naming no scope is refused by name,
+//      and a narrower grant is refused naming what is missing. The origin records no grant, so this
+//      extends #45's adaptation rather than repairing the origin.
 // The flow itself, and the reasoning recorded against each part of it, are the origin's.
 import Foundation
 import AppKit
@@ -51,6 +55,13 @@ public final class GmailAuthManager {
         // person whether to try again or to change something, and it used to be discarded into
         // "no code in redirect", which is what a malformed redirect says too (L11).
         case consentRefused(String)
+        // backstage#68: Google's reply named no scope, so what it granted is unknown. Read as empty
+        // it would be a refusal of everything, read as the request it would be the fault this
+        // replaced, and it is neither (L215).
+        case grantUnreported
+        // backstage#68: Google granted less than was asked, typically a box unticked on the consent
+        // screen. Names what is missing, because that is what the person has to grant next time.
+        case scopesNotGranted([String])
         public var errorDescription: String? {
             switch self {
             case .noClientConfig: return "The Gmail client configuration is missing."
@@ -64,6 +75,10 @@ public final class GmailAuthManager {
             case .alreadyConnecting: return "A Gmail sign-in is already in progress. Finish it in the browser."
             case .noScopes: return "No Gmail permissions were named, so there is nothing to ask Google for."
             case .consentRefused(let why): return "Google did not grant access: \(why)"
+            case .grantUnreported:
+                return "Google's reply did not say which Gmail permissions it granted, so the sign-in was not saved. Try again."
+            case .scopesNotGranted(let missing):
+                return "Google granted less than was asked for. Not granted: \(missing.joined(separator: ", "))."
             }
         }
     }
@@ -264,16 +279,24 @@ public final class GmailAuthManager {
         guard let refresh = tokens.refreshToken else {
             throw AuthError.exchangeFailed("Google did not return a refresh token. Revoke prior access and retry.")
         }
-        // THE GRANT IS RECORDED WITH THE TOKEN, never inferred later: what was
-        // asked for is known here and nowhere else (backstage#45). The account is
-        // whatever Google returned, which is nil unless an identity scope was
-        // requested, and that absence is recorded as honestly as a value would be.
+        // THE GRANT IS RECORDED WITH THE TOKEN, never inferred later (backstage#45), and it is
+        // the grant GOOGLE REPORTED, not the request (backstage#68). The account is whatever
+        // Google returned, which is nil unless an identity scope was requested, and that absence
+        // is recorded as honestly as a value would be.
+        guard let granted = tokens.grantedScopes else { throw AuthError.grantUnreported }
+        let missing = scopes.filter { !granted.contains($0) }
+        // A NARROWER CONSENT NEVER REPLACES A LOGIN THAT ALREADY COVERS EVERYTHING (L5). Unticking a
+        // box on a second consent does not revoke the first grant at Google, so the stored one is
+        // still good. With nothing covering stored, the narrower grant IS saved, so the consumer
+        // reads a mismatch naming what is missing rather than "never connected" (L11).
+        if !missing.isEmpty && connection.isConnected { throw AuthError.scopesNotGranted(missing) }
         let obtained = now()
         let stored = StoredTokens(refreshToken: refresh, accessToken: tokens.accessToken,
                                   accessTokenExpiry: tokens.expiresIn.map { obtained.addingTimeInterval(TimeInterval($0)) },
-                                  grantedScopes: scopes, account: tokens.account,
+                                  grantedScopes: granted, account: tokens.account,
                                   obtainedAt: obtained, lastConfirmedAt: obtained)
         guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
+        guard missing.isEmpty else { throw AuthError.scopesNotGranted(missing) }
     }
 
     // A valid access token, refreshing through the stored refresh token when stale.
@@ -290,6 +313,12 @@ public final class GmailAuthManager {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
         switch GoogleOAuth.interpretRefreshResponse(status: status, data: data) {
         case .success(let tokens):
+            // A REPLY NAMING NO SCOPE CONFIRMS NOTHING (backstage#68), so nothing is saved and the
+            // confirmation stamp stays where it was. Not counted as a temporary failure either: it
+            // is not a blip that the next attempt clears, it is Google answering in a shape this
+            // cannot read, and it says so by name.
+            guard let granted = tokens.grantedScopes else { throw AuthError.grantUnreported }
+            stored.grantedScopes = granted
             stored.accessToken = tokens.accessToken
             stored.accessTokenExpiry = tokens.expiresIn.map { now.addingTimeInterval(TimeInterval($0)) }
             // A SUCCESSFUL EXCHANGE IS THE ONLY EVIDENCE THE GRANT IS STILL LIVE,
@@ -297,6 +326,10 @@ public final class GmailAuthManager {
             stored.lastConfirmedAt = now
             guard try GmailCredentials.saveTokens(stored, to: tokenURL, throwaway: throwawayRoot) else { throw AuthError.tokenSaveFailed }
             refreshHealth = .healthy
+            // What Google reports NOW is the grant, so it is recorded first and a narrowed one then
+            // refused by name rather than handing out a token for less than this consumer needs.
+            let missing = scopes.filter { !granted.contains($0) }
+            guard missing.isEmpty else { throw AuthError.scopesNotGranted(missing) }
             return tokens.accessToken
         case .failure(.authExpired):
             refreshHealth = .healthy

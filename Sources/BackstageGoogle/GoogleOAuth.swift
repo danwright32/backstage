@@ -1,10 +1,10 @@
 // Ported-From: danwright32/overture mac/Overture/Integration/GoogleOAuth.swift @ 750464734bffc8bd0af69898b13ec3e42d233c02
-// Ported-Adapted: 17a3d9560022ebcc890c6d5a14e7de64bfb2b9272bb4a7261d3b0e2e956dbd13
+// Ported-Adapted: d48c1be77e8ba2c62d055155c8784f5add607b1e8efae84da36d301ccf015230
 //
 // Ported on 2026-09-18 by backstage#2. Do not edit this copy to fix a fault
 // that is also in the origin: fix it there and re-port (L263).
 //
-// TWO DELIBERATE CHANGES FROM THE ORIGIN, both recorded rather than silent.
+// DELIBERATE CHANGES FROM THE ORIGIN, each recorded rather than silent.
 //
 // 1. `OAuthConfig.gmailScopes` IS GONE (backstage#3). The origin ships a ready
 //    made list of three scopes, including gmail.settings.basic, which it needs
@@ -25,6 +25,10 @@
 // 3. The consumer facing types and functions are `public`. The origin is one app,
 //    so everything was internal. Only what a consumer must name is public;
 //    ResponseBody beside this file stays internal.
+//
+// 4. `OAuthTokens` DECODES GOOGLE'S `scope` (backstage#68), so the grant a consumer records is
+//    the one Google made rather than the one it asked for. Not owed to the origin: the origin
+//    records no grant at all, which is backstage#45's own adaptation.
 
 import Foundation
 import CryptoKit
@@ -187,6 +191,21 @@ public struct OAuthTokens: Codable, Equatable, Sendable {
     // honestly absent when it is not.
     public var idToken: String?
 
+    // WHAT GOOGLE ACTUALLY GRANTED, as the reply's own space separated list (backstage#68).
+    //
+    // Not the list that was asked for: the granular consent screen lets a person untick a scope, so
+    // the request can say more than the grant does. Recording the request would report a token as
+    // connected for a scope it does not carry, and the first symptom would be the API call that
+    // needs it (L127).
+    public var scope: String?
+
+    // Nil when the reply named no scope at all, which is NOT the same answer as an empty grant, so
+    // the two are never folded together here (L215). The caller decides what an unreported grant
+    // means; this only refuses to guess.
+    public var grantedScopes: [String]? {
+        scope.map { $0.split(whereSeparator: \.isWhitespace).map(String.init) }
+    }
+
     // The email claim, read from the id token's payload.
     //
     // NOT VERIFIED, AND THAT IS SOUND HERE rather than an omission: this token
@@ -213,5 +232,6 @@ public struct OAuthTokens: Codable, Equatable, Sendable {
         case refreshToken = "refresh_token"
         case idToken = "id_token"
         case expiresIn = "expires_in"
+        case scope
     }
 }

@@ -69,7 +69,7 @@ struct GmailAuthManagerTests {
         _ = try GmailCredentials.saveTokens(StoredTokens(refreshToken: "rt", accessToken: "old",
                                                      accessTokenExpiry: t0.addingTimeInterval(-10)), to: url)
         let m = try manager(dir, fetch: { [self] req in
-            self.response(200, #"{"access_token":"new","expires_in":3600}"#, req)
+            self.response(200, #"{"access_token":"new","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.send"}"#, req)
         })
         #expect(try await m.validAccessToken() == "new")
         let saved = GmailCredentials.loadTokens(from: url)
@@ -92,7 +92,7 @@ struct GmailAuthManagerTests {
                          grantedScopes: ["https://www.googleapis.com/auth/gmail.send"],
                          obtainedAt: longAgo, lastConfirmedAt: longAgo), to: url)
         let m = try manager(dir, fetch: { [self] req in
-            self.response(200, #"{"access_token":"new","expires_in":3600}"#, req)
+            self.response(200, #"{"access_token":"new","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.send"}"#, req)
         })
         #expect(try await m.validAccessToken() == "new")
         let saved = GmailCredentials.loadTokens(from: url)
@@ -161,7 +161,8 @@ struct GmailAuthManagerTests {
         try Data("x".utf8).write(to: blocked)
         let m = try manager(blocked)
         #expect(throws: GmailAuthManager.AuthError.tokenSaveFailed) {
-            try m.persistExchangedTokens(OAuthTokens(accessToken: "at", refreshToken: "rt", expiresIn: 60))
+            try m.persistExchangedTokens(OAuthTokens(accessToken: "at", refreshToken: "rt", expiresIn: 60,
+                                                     scope: scopes[0]))
         }
     }
 
@@ -188,7 +189,7 @@ struct GmailAuthManagerTests {
         let dir = try scratch(); try writeClient(dir)
         let opened = Box<URL?>(nil)
         let m = try manager(dir,
-            fetch: { [self] req in self.response(200, #"{"access_token":"at","refresh_token":"rt","expires_in":3600}"#, req) },
+            fetch: { [self] req in self.response(200, #"{"access_token":"at","refresh_token":"rt","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.send"}"#, req) },
             openBrowser: { url in
                 opened.value = url
                 let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -213,7 +214,7 @@ struct GmailAuthManagerTests {
         let dir = try scratch(); try writeClient(dir)
         let opened = Box<URL?>(nil)
         let m = try manager(dir,
-            fetch: { [self] req in self.response(200, #"{"access_token":"at","refresh_token":"rt"}"#, req) },
+            fetch: { [self] req in self.response(200, #"{"access_token":"at","refresh_token":"rt","scope":"https://www.googleapis.com/auth/gmail.send"}"#, req) },
             openBrowser: { url in
                 opened.value = url
                 let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -385,7 +386,7 @@ struct GmailAuthManagerTests {
             now: { clock.value },
             fetch: { [self] req in
                 answer.value == 200
-                    ? self.response(200, #"{"access_token":"at","expires_in":1}"#, req)
+                    ? self.response(200, #"{"access_token":"at","expires_in":1,"scope":"https://www.googleapis.com/auth/gmail.send"}"#, req)
                     : self.response(answer.value, "gateway", req)
             })
     }
@@ -421,7 +422,7 @@ struct GmailAuthManagerTests {
         let m = try GmailAuthManager(credentialsDirectory: dir, scopes: scopes, productName: "Ovation",
             now: { clock.value },
             fetch: { [self] req in
-                answer.value == 200 ? self.response(200, #"{"access_token":"at","expires_in":1}"#, req)
+                answer.value == 200 ? self.response(200, #"{"access_token":"at","expires_in":1,"scope":"https://www.googleapis.com/auth/gmail.send"}"#, req)
                                     : self.response(503, "gateway", req) })
         for _ in 0..<3 { _ = try? await m.validAccessToken() }
         answer.value = 200
