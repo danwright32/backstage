@@ -39,6 +39,13 @@ wording a status line around it reads the same number.
     case connected(GmailGrant)                                    // account, scopes, obtained, last confirmed
     case grantMismatch(missingScopes: [String], storedAccount: String?)
 
+The scopes recorded are the ones **Google reported granting**, read from its
+reply on the sign in and on every refresh, never the list that was asked for.
+Google's consent screen lets a person untick a scope, so the two can differ. A
+reply that names no scope is refused as `grantUnreported`, and a grant narrower
+than asked is refused as `scopesNotGranted`, naming what is missing. A narrower
+sign in never replaces a stored login that already covers everything.
+
 The scopes a token was granted for are recorded with it, and connected is judged
 against **this consumer's own** scope list. That is the one fact that differs
 between three apps sharing this package, so without it a token written by one is
