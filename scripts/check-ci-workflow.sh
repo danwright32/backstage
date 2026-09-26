@@ -1,12 +1,20 @@
 #!/bin/bash
-# Ported-From: danwright32/ovation scripts/check-ci-workflow.sh @ 36c4ae029cbad8f5bbd327b37f0371a3d0c72a91
-# Ported-Adapted: 634133a26ebab8e134beddae9c28203ca189a422b1f2c69844a05d295f3345de
-# Ported-Divergence: danwright32/ovation#399
+# Ported-From: danwright32/ovation scripts/check-ci-workflow.sh @ 6814737f16c67e4f2a3fb5d062cb96d5dde6d44f
+# Ported-Adapted: f61a9c062a5cfaf03877d365e65de514435416bc866b8125c8f588f5f62671d8
 #
-# Ported on 2026-09-17 by backstage#7. Three of its four rules are general and
-# arrive unchanged: a timeout on every job, every action pinned to a sha, and one
-# run per commit. The fourth, the documented command, is re-derived because the
-# command this repository runs in CI is not the one the origin runs (L501).
+# Re-ported on 2026-09-26 by backstage#69, first ported by backstage#7. Three of
+# its four rules are general and arrive unchanged: a timeout on every job, every
+# action pinned to a sha, and one run per commit. What differs, all deliberate:
+#
+#   the documented command   re-derived, because the command this repository
+#                            runs in CI is not the one the origin runs (L501);
+#                            the reason sits beside WANTED below
+#   the seams                BACKSTAGE_WORKFLOW_DIR, not OVATION_WORKFLOW_DIR,
+#                            since a variable named for another product would
+#                            be read by nothing here
+#   the issue it names       backstage#7 where the origin names ovation#143, in
+#                            the refusal for a missing workflow, because that
+#                            is where this repository decided to have CI
 # The CI workflow carries decisions, and a workflow file is the kind of thing
 # nothing else in a repository ever reads.
 #
@@ -33,33 +41,9 @@
 #
 # It prints paths, job names and counts. There is nothing here to redact.
 set -uo pipefail
-
-# DELIBERATE DIVERGENCE FROM THE ORIGIN, recorded because port discipline says a
-# fault in both is fixed at the origin and re-ported, never patched in the copy.
-# The origin has this same fail open and is tracked as ovation#399; its libraries
-# are present, so it has never fired there. This copy carries the fix now because
-# it is the repository where the fault actually occurred. When ovation#399 lands,
-# re-port and delete this paragraph.
-#
-# SOURCED, OR REFUSED. Bash's `.` on a missing file prints to stderr, returns
-# non zero and CARRIES ON, so without this the check runs to its summary with
-# whole rules silently absent and exits 0. That happened on this repository's
-# first run of it (backstage#7): two libraries were not ported with the check,
-# and it reported examining one workflow and holding 0 check scripts against the
-# inventory. Both sentences were true. The check had not run.
-#
-# A guard that goes green because a part of it could not run is
-# indistinguishable from one that verified everything (L98, L530).
-require_lib() {
-  if [ ! -f "$1" ]; then
-    echo "REFUSED: $1 is missing, so part of this check could not run."
-    echo "    Nothing was verified, which is not the same as nothing being wrong."
-    exit 2
-  fi
-  # shellcheck disable=SC1090
-  . "$1"
-}
-
+# ovation#399: every library is loaded through require_lib, which refuses by name
+# rather than carrying on without it. See scripts/lib/require.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/lib/require.sh" 2>/dev/null || { echo "REFUSED: scripts/lib/require.sh is missing, so nothing was checked." >&2; exit 2; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="${BACKSTAGE_WORKFLOW_DIR:-$REPO_ROOT/.github/workflows}"
@@ -217,7 +201,7 @@ while IFS= read -r file; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
     # A two space indented key that is not deeper: a job name.
-    if printf '%s' "$line" | grep -qE '^  [A-Za-z0-9_-]+:[[:space:]]*$'; then
+    if grep -qE '^  [A-Za-z0-9_-]+:[[:space:]]*$' <<< "$line"; then
       finish_job
       current_job="$(printf '%s' "$line" | tr -d ' :')"
       job_count=$((job_count+1))
@@ -247,7 +231,7 @@ while IFS= read -r file; do
          problems=$((problems+1)); continue ;;
     esac
     ref="${used##*@}"
-    if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
+    if ! grep -qE '^[0-9a-f]{40}$' <<< "$ref"; then
       echo "UNPINNED: $used in $(basename "$file")"
       echo "    a tag or branch is somebody else's choice of what runs here"
       echo "    tomorrow. Pin the commit: gh api repos/<owner>/<repo>/git/ref/tags/<tag>"

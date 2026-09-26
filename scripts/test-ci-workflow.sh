@@ -1,11 +1,13 @@
 #!/bin/bash
 # Ported-From: danwright32/ovation scripts/test-ci-workflow.sh @ 36c4ae029cbad8f5bbd327b37f0371a3d0c72a91
-# Ported-Adapted: 754cc668384aeae470091bb66ce33cbd3339f777b2f2528ea51b65fbfc0fdcae
+# Ported-Adapted: f9a6a38ba7c6f9d4cc5d9cb03066db41e6002ffd91cd79343556155d1f4d4341
 #
 # Ported on 2026-09-17 by backstage#7. Three of its four rules are general and
 # arrive unchanged: a timeout on every job, every action pinned to a sha, and one
 # run per commit. The fourth, the documented command, is re-derived because the
 # command this repository runs in CI is not the one the origin runs (L501).
+# Two cases of its own follow the origin's: a library the check sources going
+# missing (backstage#7), and, since backstage#69, the loader require.sh itself.
 # The CI workflow must carry the decisions that made CI exist, and a workflow
 # file is exactly the kind of thing nothing else in a repository ever reads.
 #
@@ -25,7 +27,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 . "$(dirname "$0")/lib/test-harness.sh"
-harness_begin "ci workflow tests" 37
+harness_begin "ci workflow tests" 39
 
 TARGET="scripts/check-ci-workflow.sh"
 require_target "$TARGET"
@@ -370,7 +372,7 @@ check "push to main written as a block list, beside pull requests, passes" "$(st
 LIBLESS="$WORK/libless"
 mkdir -p "$LIBLESS/scripts/lib"
 cp "$TARGET" "$LIBLESS/scripts/"
-cp scripts/lib/script-roles.sh scripts/lib/script-roles.tsv "$LIBLESS/scripts/lib/"
+cp scripts/lib/require.sh scripts/lib/script-roles.sh scripts/lib/script-roles.tsv "$LIBLESS/scripts/lib/"
 # workflow-text.sh is deliberately NOT copied.
 good_workflow "$WORK/wf-for-libless"
 LIBLESS_OUT="$(cd "$LIBLESS" && BACKSTAGE_WORKFLOW_DIR="$WORK/wf-for-libless" "./scripts/$(basename "$TARGET")" 2>&1)"
@@ -379,5 +381,19 @@ check "a missing library is refused, never summarised over" \
     "$([ "$LIBLESS_STATUS" -ne 0 ] && echo refused || echo passed)" "refused"
 check "and the refusal names the library that was missing" \
     "$(printf '%s' "$LIBLESS_OUT" | grep -c 'workflow-text.sh')" "1"
+
+# THE LOADER ITSELF GOING MISSING (backstage#69). Since the re-port the check
+# loads require.sh first, with a line of its own that refuses when that file is
+# absent, so the case above copies it in order to stay about workflow-text.sh,
+# and this one takes it away. Exit 2 is the origin's "could not run" code.
+REQLESS="$WORK/reqless"
+mkdir -p "$REQLESS/scripts/lib"
+cp "$TARGET" "$REQLESS/scripts/"
+cp scripts/lib/script-roles.sh scripts/lib/script-roles.tsv scripts/lib/workflow-text.sh "$REQLESS/scripts/lib/"
+REQLESS_OUT="$(cd "$REQLESS" && BACKSTAGE_WORKFLOW_DIR="$WORK/wf-for-libless" "./scripts/$(basename "$TARGET")" 2>&1)"
+REQLESS_STATUS=$?
+check "a missing loader is refused as could not run" "$REQLESS_STATUS" "2"
+check "and the refusal names the loader" \
+    "$(printf '%s' "$REQLESS_OUT" | grep -c 'require.sh is missing')" "1"
 
 harness_end
