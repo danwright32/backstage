@@ -1,9 +1,12 @@
 # Ported-From: danwright32/ovation scripts/lib/require.sh @ 6814737f16c67e4f2a3fb5d062cb96d5dde6d44f
 #
-# Ported on 2026-09-26 by backstage#69, with the three scripts that now load
-# their libraries through it. It arrives unchanged. The scan it mentions,
-# scripts/test-require-lib.sh, was NOT ported with it, so here nothing refuses a
-# library loaded some other way.
+# Ported on 2026-09-26 by backstage#69. It arrives unchanged. Two scripts load
+# their libraries through it: check-ci-workflow.sh and check-ported-artifacts.sh.
+# check-ported-content.sh deliberately keeps its own guard, because its exit 2
+# already means a sibling repository is not on this machine, and a missing
+# library there is exit 4; routing it through this would give two causes one
+# code (L11). The scan it mentions, scripts/test-require-lib.sh, was NOT ported
+# with it, so here nothing refuses a library loaded some other way (backstage#71).
 # Sourced, never run. `require_lib` loads a library or REFUSES, by name.
 #
 # ovation#399. Bash's `.` on a missing file writes to stderr, returns non zero,
