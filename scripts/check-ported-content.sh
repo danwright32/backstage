@@ -112,8 +112,14 @@ else
   exit 4
 fi
 
+# THE REFUSAL IS WRITTEN HERE. The library's sibling_search_roots used to print
+# its own CANNOT MEASURE line; since the re-port of backstage#69 it refuses as
+# sibling_root does, with the reason on stderr and nothing on stdout, so a caller
+# that only echoed what it captured would print a blank line and exit 2 with no
+# remedy named.
 if ! SEARCH_ROOTS="$(sibling_search_roots "$REPO_ROOT")"; then
-  printf '%s\n' "$SEARCH_ROOTS"
+  echo "CANNOT MEASURE: where the sibling checkouts live could not be worked out (see above)."
+  echo "    Set BACKSTAGE_SIBLING_SEARCH_ROOTS to the folder holding them."
   exit 2
 fi
 

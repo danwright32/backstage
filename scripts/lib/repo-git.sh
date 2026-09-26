@@ -1,14 +1,16 @@
 #!/bin/bash
-# Ported-From: danwright32/ovation scripts/lib/repo-git.sh @ 04e3dc90848ae267f4e55e2b58407f2de41dc43a
-# Ported-Adapted: f9865e50a532e94421cfbd7b361ceb7966858771c9b46ba55e3b51887ca2ff9a
-# Ported-Divergence: danwright32/ovation#417
+# Ported-From: danwright32/ovation scripts/lib/repo-git.sh @ 6814737f16c67e4f2a3fb5d062cb96d5dde6d44f
+# Ported-Adapted: 56f393c9699035a63686dbf984236d218de58abad1a8ea0688a1230348a8513b
 #
-# Ported on 2026-09-17 by backstage#2. Do not edit this copy to fix a fault
-# that is also in the origin: fix it there and re-port, or the two silently
-# diverge and the shared definition stops being shared (L263). Every constant
-# was re-checked against what backstage needs rather than inherited (L501).
-# The seam names are the one deliberate difference, since an environment
-# variable named for another product would be read by nothing here.
+# Re-ported on 2026-09-26 by backstage#69, first ported by backstage#2. Do not
+# edit this copy to fix a fault that is also in the origin: fix it there and
+# re-port, or the two silently diverge and the shared definition stops being
+# shared (L263). Every constant was re-checked against what backstage needs
+# rather than inherited (L501).
+#
+# THE ONE DELIBERATE DIFFERENCE: the seam is BACKSTAGE_SIBLING_SEARCH_ROOTS, not
+# OVATION_SIBLING_SEARCH_ROOTS, since an environment variable named for another
+# product would be read by nothing here.
 # Asking git about a repository, and finding the folder the sibling checkouts
 # live in. ovation#314.
 #
@@ -69,39 +71,23 @@ sibling_root() {
     dirname "$(dirname "$common")"
 }
 
-# Where the sibling checkouts live, honouring the override a suite sets so no
-# case has to read a real sibling (L2). It REFUSES rather than guessing, and it
-# prints the refusal itself, because two callers each writing that message are
-# two messages that drift apart (L370).
+# WHICH CHECKOUT ON THIS MACHINE IS <owner>/<repo> (ovation#417).
 #
-#     SEARCH_ROOTS="$(sibling_search_roots "$REPO_ROOT")" || exit 2
-sibling_search_roots() {
-    local from="$1"
-    if [ -n "${BACKSTAGE_SIBLING_SEARCH_ROOTS:-}" ]; then
-        printf '%s\n' "$BACKSTAGE_SIBLING_SEARCH_ROOTS"
-        return 0
-    fi
-    if ! sibling_root "$from"; then
-        echo "CANNOT MEASURE: where the sibling checkouts live could not be worked out (see above)."
-        echo "    Set BACKSTAGE_SIBLING_SEARCH_ROOTS to the folder holding them."
-        return 1
-    fi
-}
-
-# Resolve <owner>/<repo> to a local checkout by asking each candidate what its
-# origin actually IS, rather than matching on directory name. Overture's checkout
-# is not called "overture", so a name match would miss it, and a directory that
-# merely shares a name is not the same repository (L15).
+#     resolve_sibling <owner/repo> <roots>    prints the checkout, or returns 1
 #
-#     resolve_sibling <owner/repo> <colon separated roots>
+# <roots> is colon separated, the way sibling_search_roots prints it. Each
+# candidate is asked what its origin actually IS rather than matched on its
+# folder name: Overture's checkout is not called "overture", and a folder that
+# merely shares a name is not the same repository (L15). Nested checkouts under
+# `.claude` are skipped, because a worktree holds a full second copy (L234).
 #
-# HERE RATHER THAN IN EACH CHECK. Two guards ask this question, and the second
-# one arriving with its own copy is how the two come to resolve siblings
-# differently while each reads as correct (L370, L613).
+# IT LIVES HERE because check-ported-artifacts.sh carried the only copy, and the
+# second caller, backstage's edit guard, copied it: the duplication this library
+# was made to end, arriving for the one question it was made around (L613).
 resolve_sibling() {
-    local slug="$1" root candidate url
+    local slug="$1" roots="$2" root candidate url
     local IFS=:
-    for root in $2; do
+    for root in $roots; do
         [ -d "$root" ] || continue
         while IFS= read -r candidate; do
             url="$(clean_git -C "$candidate" remote get-url origin 2>/dev/null)" || continue
@@ -111,4 +97,18 @@ resolve_sibling() {
         done < <(find "$root" -maxdepth 3 -type d -name .git -not -path '*/.claude/*' 2>/dev/null | sed 's|/\.git$||')
     done
     return 1
+}
+
+# WHERE TO LOOK FOR THE SIBLINGS, for a caller about to resolve one.
+#
+#     sibling_search_roots <dir>    prints the roots, or refuses as sibling_root does
+#
+# BACKSTAGE_SIBLING_SEARCH_ROOTS wins when set, which is how a suite points a check
+# at throwaway repositories; otherwise it is the folder beside the primary checkout.
+sibling_search_roots() {
+    if [ -n "${BACKSTAGE_SIBLING_SEARCH_ROOTS:-}" ]; then
+        printf '%s\n' "$BACKSTAGE_SIBLING_SEARCH_ROOTS"
+        return 0
+    fi
+    sibling_root "$1"
 }

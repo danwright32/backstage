@@ -11,7 +11,8 @@ check-ported-artifacts.sh	gated	A repo wide guard. test-check-ported-artifacts.s
 check-secrets.sh	workflow	Named by the CI workflow step, and by the pre push hook. It is the only thing that scans the REAL tree: the suite exercises it against throwaway trees only.
 install-git-hooks.sh	tool	Run by hand, once per clone. Nothing automated may call it, because a hook a machine installed for you is one nobody chose.
 run-tests.sh	gated	The runner the pre push hook and the CI workflow both call. test-run-tests.sh drives it against throwaway trees.
-lib/repo-git.sh	library	Sourced by check-ported-artifacts.sh. Never run.
+lib/repo-git.sh	library	Sourced by check-ported-artifacts.sh and check-ported-content.sh. Never run.
+lib/require.sh	library	Sourced first by check-ci-workflow.sh and check-ported-artifacts.sh, to load every other library or refuse by name (ovation#399, backstage#69). Never run.
 lib/script-roles.sh	library	The one reader of this file. Sourced by check-ci-workflow.sh. Never run.
 lib/test-harness.sh	library	Sourced by every suite. test-test-harness.sh covers it.
 lib/workflow-text.sh	library	Sourced by check-ci-workflow.sh to decide what counts as a step. Never run.
