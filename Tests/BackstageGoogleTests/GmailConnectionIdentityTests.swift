@@ -106,7 +106,7 @@ struct GmailConnectionIdentityTests {
 
     // --- what the manager records when it actually obtains a grant ---
 
-    @Test @MainActor func afirstExchangeRecordsTheScopesItAskedForAndWhen() throws {
+    @Test @MainActor func afirstExchangeRecordsTheScopesGoogleGrantedAndWhen() throws {
         let dir = try scratch()
         let clock = Date(timeIntervalSince1970: 5_000)
         let manager = try GmailAuthManager(credentialsDirectory: dir, scopes: [send],
@@ -114,7 +114,7 @@ struct GmailConnectionIdentityTests {
         manager.throwawayRoot = dir
 
         try manager.persistExchangedTokens(OAuthTokens(accessToken: "at", refreshToken: "rt",
-                                                       expiresIn: 3600))
+                                                       expiresIn: 3600, scope: send))
 
         let stored = GmailCredentials.loadTokens(from: GmailCredentials.tokenURL(in: dir))
         #expect(stored?.grantedScopes == [send])
